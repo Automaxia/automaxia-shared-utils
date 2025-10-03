@@ -1,3 +1,8 @@
-requests>=2.31.0
+# Core dependencies - compatível com Python 3.13.2
+requests>=2.32.0
 python-decouple>=3.8
-tiktoken>=0.5.1
+tiktoken>=0.7.0
+
+# Optional: LangChain support (instalar com: pip install automaxia-utils[langchain])
+# langchain>=0.3.0
+# langchain-community>=0.3.0
