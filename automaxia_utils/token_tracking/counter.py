@@ -21,7 +21,7 @@ except ImportError:
     LANGCHAIN_AVAILABLE = False
     logging.warning("LangChain não disponível. Funcionalidades relacionadas serão desabilitadas.")
 
-from admin_center.service import get_admin_center_service
+from automaxia_utils.admin_center.service import get_admin_center_service
 
 class CurrencyService:
     """Serviço para obter cotação USD/BRL atualizada"""

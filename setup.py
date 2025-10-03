@@ -14,7 +14,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="automaxia-utils",
-    version="1.0.2",
+    version="1.0.3",
     author="Automaxia",
     author_email="dev@automaxia.com",
     description="Utilitários compartilhados para rastreamento de tokens e integração com Admin Center",
