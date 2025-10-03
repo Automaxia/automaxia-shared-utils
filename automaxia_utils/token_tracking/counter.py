@@ -21,7 +21,7 @@ except ImportError:
     LANGCHAIN_AVAILABLE = False
     logging.warning("LangChain não disponível. Funcionalidades relacionadas serão desabilitadas.")
 
-from utils.admin_center_service import get_admin_center_service
+from admin_center.service import get_admin_center_service
 
 class CurrencyService:
     """Serviço para obter cotação USD/BRL atualizada"""
@@ -261,75 +261,103 @@ class HybridTokenCounter:
         }
 
 # ==================== FUNÇÃO PRINCIPAL (RECOMENDADA) ====================
-
+"""
+Função UNIVERSAL para tracking - detecta automaticamente o provider
+Adicione isso ao seu token_counter.py
+"""
 def track_api_response(
     response: Any, 
     model: str, 
     endpoint: str = "/api_direct", 
     user_id: Optional[str] = None, 
-    prompt_text: str = ""
+    prompt_text: str = "",
+    force_provider: Optional[str] = None  # Novo parâmetro opcional
 ) -> Dict[str, Any]:
     """
-    ✅ MELHOR OPÇÃO: Rastreia usando tokens REAIS da resposta da API
+    ✅ FUNÇÃO UNIVERSAL: Detecta automaticamente OpenAI, LangChain, Anthropic, etc
     
     Args:
-        response: Objeto de resposta COMPLETO da API (OpenAI, Anthropic, etc)
+        response: Objeto COMPLETO da resposta (qualquer provider)
         model: Nome do modelo usado
         endpoint: Endpoint da sua aplicação
         user_id: ID do usuário (opcional)
         prompt_text: Texto do prompt (apenas para metadata)
+        force_provider: Forçar detecção específica ("openai", "langchain", "anthropic")
     
     Returns:
         Dict com tokens, custos e status do tracking
     """
     counter = HybridTokenCounter(model)
     
-    # Tentar extrair tokens REAIS da resposta
-    tokens = extract_tokens_from_response(response)
+    # 1. DETECÇÃO AUTOMÁTICA DO PROVIDER
+    provider = force_provider or _detect_provider(response)
     
-    if tokens:
-        prompt_tokens = tokens["prompt_tokens"]
-        completion_tokens = tokens["completion_tokens"]
-        source = "api_response"
-        logging.info(
-            f"✅ Tokens REAIS extraídos: "
-            f"prompt={prompt_tokens}, completion={completion_tokens}, total={tokens['total_tokens']}"
-        )
+    # 2. EXTRAÇÃO DE TOKENS BASEADA NO PROVIDER
+    tokens = None
+    source = "unknown"
+    
+    if provider == "openai":
+        tokens = _extract_openai_tokens(response)
+        source = "openai_api" if tokens else "tiktoken_fallback"
+        
+    elif provider == "langchain":
+        tokens = _extract_langchain_tokens(response)
+        source = "langchain_api" if tokens else "tiktoken_fallback"
+        
+    elif provider == "anthropic":
+        tokens = _extract_anthropic_tokens(response)
+        source = "anthropic_api" if tokens else "tiktoken_fallback"
+        
     else:
-        # Fallback para tiktoken (MENOS PRECISO)
-        logging.warning("⚠️ Usando tiktoken como fallback - pode haver discrepância com OpenAI!")
+        # Fallback genérico: tentar extração universal
+        tokens = extract_tokens_from_response(response)
+        source = "generic_extraction" if tokens else "tiktoken_fallback"
+    
+    # 3. FALLBACK PARA TIKTOKEN SE NECESSÁRIO
+    if not tokens:
+        logging.warning(
+            f"Não foi possível extrair tokens de {provider}. "
+            f"Usando tiktoken (menos preciso). Provider detectado: {provider}"
+        )
         prompt_tokens = count_tokens_tiktoken(prompt_text, model)
         
         # Tentar extrair texto da resposta
-        response_text = ""
-        try:
-            if hasattr(response, 'choices') and response.choices:
-                response_text = response.choices[0].message.content
-            elif hasattr(response, 'content'):
-                response_text = response.content
-        except Exception as e:
-            logging.error(f"Erro ao extrair texto da resposta: {e}")
-        
+        response_text = _extract_response_text(response, provider)
         completion_tokens = count_tokens_tiktoken(response_text, model) if response_text else 0
+        
+        tokens = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens
+        }
         source = "tiktoken_fallback"
     
-    # Calcular custos
+    prompt_tokens = tokens["prompt_tokens"]
+    completion_tokens = tokens["completion_tokens"]
+    
+    logging.info(
+        f"✅ Tokens extraídos via {source} (provider: {provider}): "
+        f"prompt={prompt_tokens}, completion={completion_tokens}"
+    )
+    
+    # 4. CALCULAR CUSTOS
     costs = counter.calculate_costs(prompt_tokens, completion_tokens)
     
-    # Metadata enriquecido
+    # 5. METADATA ENRIQUECIDO
     enhanced_metadata = {
-        "prompt_text": prompt_text[:500] if prompt_text else "",  # Limitar tamanho
+        "prompt_text": prompt_text[:500] if prompt_text else "",
         "model_name": model,
+        "provider": provider,
+        "token_source": source,
         "vlr_dolar": costs["exchange_rate"],
         "cost_usd": costs["cost_usd"],
         "cost_brl": costs["cost_brl"],
         "price_source": costs["price_source"],
         "cost_breakdown": costs["cost_breakdown"],
-        "token_source": source,
         "timestamp": datetime.now().isoformat()
     }
     
-    # Enviar para Admin Center
+    # 6. ENVIAR PARA ADMIN CENTER
     track_success = counter.admin_center.track_token_usage(
         model_name=model,
         prompt_tokens=prompt_tokens,
@@ -344,12 +372,140 @@ def track_api_response(
         "completion_tokens": completion_tokens,
         "total_tokens": prompt_tokens + completion_tokens,
         "source": source,
+        "provider": provider,
         "model": model,
         "admin_center_tracked": track_success,
         "timestamp": datetime.now().isoformat(),
         **costs
     }
 
+
+# ============================================================
+# FUNÇÕES AUXILIARES DE DETECÇÃO E EXTRAÇÃO
+# ============================================================
+
+def _detect_provider(response: Any) -> str:
+    """
+    Detecta automaticamente o provider baseado na estrutura do objeto
+    """
+    response_type = type(response).__name__
+    module = type(response).__module__
+    
+    # OpenAI SDK
+    if "openai" in module.lower():
+        return "openai"
+    
+    # LangChain
+    if "langchain" in module.lower():
+        return "langchain"
+    
+    # Anthropic
+    if "anthropic" in module.lower():
+        return "anthropic"
+    
+    # Detecção por estrutura
+    if hasattr(response, "usage"):
+        if hasattr(response.usage, "prompt_tokens"):
+            return "openai"  # Formato OpenAI
+        elif hasattr(response.usage, "input_tokens"):
+            return "anthropic"  # Formato Anthropic
+    
+    if hasattr(response, "llm_output"):
+        return "langchain"
+    
+    logging.warning(
+        f"Provider desconhecido. Type: {response_type}, Module: {module}"
+    )
+    return "unknown"
+
+
+def _extract_openai_tokens(response: Any) -> Optional[Dict[str, int]]:
+    """Extrai tokens de resposta OpenAI"""
+    try:
+        if hasattr(response, "usage"):
+            usage = response.usage
+            return {
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens
+            }
+    except Exception as e:
+        logging.debug(f"Erro ao extrair tokens OpenAI: {e}")
+    return None
+
+
+def _extract_langchain_tokens(response: Any) -> Optional[Dict[str, int]]:
+    """Extrai tokens de resposta LangChain"""
+    try:
+        # LangChain armazena em llm_output
+        if hasattr(response, "llm_output") and isinstance(response.llm_output, dict):
+            usage = response.llm_output.get("token_usage", {})
+            if usage:
+                return {
+                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage.get("completion_tokens", 0),
+                    "total_tokens": usage.get("total_tokens", 0)
+                }
+        
+        # Algumas versões do LangChain expõem usage diretamente
+        if hasattr(response, "usage"):
+            return _extract_openai_tokens(response)
+            
+    except Exception as e:
+        logging.debug(f"Erro ao extrair tokens LangChain: {e}")
+    return None
+
+
+def _extract_anthropic_tokens(response: Any) -> Optional[Dict[str, int]]:
+    """Extrai tokens de resposta Anthropic (Claude)"""
+    try:
+        if hasattr(response, "usage"):
+            usage = response.usage
+            if hasattr(usage, "input_tokens"):
+                return {
+                    "prompt_tokens": usage.input_tokens,
+                    "completion_tokens": usage.output_tokens,
+                    "total_tokens": usage.input_tokens + usage.output_tokens
+                }
+    except Exception as e:
+        logging.debug(f"Erro ao extrair tokens Anthropic: {e}")
+    return None
+
+
+def _extract_response_text(response: Any, provider: str) -> str:
+    """Extrai texto da resposta baseado no provider"""
+    try:
+        # OpenAI
+        if provider == "openai":
+            if hasattr(response, "choices") and response.choices:
+                return response.choices[0].message.content or ""
+        
+        # LangChain
+        elif provider == "langchain":
+            if hasattr(response, "text"):
+                return response.text
+            if hasattr(response, "content"):
+                return response.content
+            if hasattr(response, "generations"):
+                return response.generations[0][0].text
+        
+        # Anthropic
+        elif provider == "anthropic":
+            if hasattr(response, "content"):
+                if isinstance(response.content, list):
+                    return " ".join([c.text for c in response.content if hasattr(c, "text")])
+                return response.content
+        
+        # Genérico
+        if hasattr(response, "content"):
+            return str(response.content)
+        if hasattr(response, "text"):
+            return str(response.text)
+            
+    except Exception as e:
+        logging.debug(f"Erro ao extrair texto da resposta: {e}")
+    
+    return ""
 # ==================== FUNÇÕES DE COMPATIBILIDADE ====================
 
 def track_openai_call(
