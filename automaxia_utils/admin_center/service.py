@@ -45,26 +45,30 @@ class AdminCenterConfig:
     @classmethod
     def from_env(cls, prefix: str = "ADMIN_CENTER"):
         """Cria configuração a partir de variáveis de ambiente"""
-        api_url = config(f"{prefix}_URL", "")
-        if config("ENVIRONMENT", "") == 'development':
-            api_url = config(f"{prefix}_URL_LOCAL", "") or api_url
+            
+        environment = os.getenv("ENVIRONMENT", "production")
+        api_url = os.getenv(f"{prefix}_URL", "")
+        
+        if environment == 'development':
+            api_url_local = os.getenv(f"{prefix}_URL_LOCAL", "")
+            if api_url_local:
+                api_url = api_url_local
 
         return cls(
             api_url=api_url,
-            api_key=config(f"{prefix}_API_KEY", ""),
-            product_id=config(f"{prefix}_PRODUCT_ID", ""),
-            environment_id=config(f"{prefix}_ENVIRONMENT_ID", ""),
-            organization_id=config(f"{prefix}_ORGANIZATION_ID", ""),
-            environment_id_dev=config(f"{prefix}_ENVIRONMENT_ID_DEV", ""),
-            environment_name=config("ENVIRONMENT", "production"),
-            enabled=config(f"{prefix}_ENABLED", "true").lower() == "true",
-            # CONFIGURAÇÕES FORÇADAS PARA ALTA PERFORMANCE
-            batch_mode=bool(config(f"{prefix}_BATCH_MODE", "true")),
-            batch_size=int(config(f"{prefix}_BATCH_SIZE", "50")),
-            batch_interval=int(config(f"{prefix}_BATCH_INTERVAL", "2")),
-            timeout=int(config(f"{prefix}_TIMEOUT", "10")),
-            max_retries=int(config(f"{prefix}_MAX_RETRIES", "2")),
-            queue_max_size=int(config(f"{prefix}_QUEUE_MAX_SIZE", "1000"))
+            api_key=os.getenv(f"{prefix}_API_KEY", ""),
+            product_id=os.getenv(f"{prefix}_PRODUCT_ID", ""),
+            environment_id=os.getenv(f"{prefix}_ENVIRONMENT_ID", ""),
+            organization_id=os.getenv(f"{prefix}_ORGANIZATION_ID", ""),
+            environment_id_dev=os.getenv(f"{prefix}_ENVIRONMENT_ID_DEV", ""),
+            environment_name=environment,
+            enabled=os.getenv(f"{prefix}_ENABLED", "true").lower() == "true",
+            batch_mode=os.getenv(f"{prefix}_BATCH_MODE", "true").lower() == "true",
+            batch_size=int(os.getenv(f"{prefix}_BATCH_SIZE", "50")),
+            batch_interval=int(os.getenv(f"{prefix}_BATCH_INTERVAL", "2")),
+            timeout=int(os.getenv(f"{prefix}_TIMEOUT", "10")),
+            max_retries=int(os.getenv(f"{prefix}_MAX_RETRIES", "2")),
+            queue_max_size=int(os.getenv(f"{prefix}_QUEUE_MAX_SIZE", "1000"))
         )
     
     def is_valid(self) -> bool:
