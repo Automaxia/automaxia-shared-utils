@@ -46,13 +46,16 @@ class AdminCenterConfig:
     def from_env(cls, prefix: str = "ADMIN_CENTER"):
         """Cria configuração a partir de variáveis de ambiente"""
             
-        environment = os.getenv("ENVIRONMENT", "production")
+        environment = os.getenv("ENVIRONMENT", "production").lower()
+        
+        # URL principal (Prod)
         api_url = os.getenv(f"{prefix}_URL", "")
         
+        # Suporte a URL de desenvolvimento (Prioridade para DEV_URL, depois LOCAL)
         if environment == 'development':
-            api_url_local = os.getenv(f"{prefix}_URL_LOCAL", "")
-            if api_url_local:
-                api_url = api_url_local
+            dev_url = os.getenv(f"{prefix}_DEV_URL") or os.getenv(f"{prefix}_URL_LOCAL")
+            if dev_url:
+                api_url = dev_url
 
         return cls(
             api_url=api_url,
@@ -88,6 +91,13 @@ class AdminCenterEndpoints:
     ENVIRONMENT_VARIABLES = "/environment/{}/variables"
     AI_MODEL_BY_NAME = "/ai-model/consulta_nome"
     AUTH_TOKEN = "/auth/gerar-token/api-key"
+    # Prompts
+    PROMPT_BY_SLUG = "/prompt/{}"
+    PROMPT_BY_ID = "/prompt/consulta_id"
+    PROMPTS_BY_PRODUCT = "/product/{}/prompts"
+    PROMPT_LOG_USAGE = "/prompt/{}/log-usage"
+    # Agents
+    EFFECTIVE_PROMPT = "/product/{}/agent/{}/effective-prompt"
 
 
 class AdminCenterService:
@@ -318,23 +328,28 @@ class AdminCenterService:
         self.logger.debug(f"Secret '{secret_name}' não encontrado")
         return None
     
-    def track_token_usage(self, model_name: str, prompt_tokens: int, 
+    def track_token_usage(self, model_name: str, prompt_tokens: int,
                          completion_tokens: int, request_id: str = None,
-                         user_id: str = None, endpoint_called: str = None, metadata: Dict = {}) -> bool:
+                         user_id: str = None, endpoint_called: str = None,
+                         prompt_id: str = None, metadata: Dict = {}) -> bool:
         """
         Registra uso de tokens de IA - SEMPRE ASSÍNCRONO para máxima performance
+
+        Args:
+            prompt_id: ID do prompt cadastrado no AdminCenter (opcional).
+                       Permite analytics de uso por prompt.
         """
         if not self.config.enabled:
             return False
-        
+
         model_id = self._get_model_id_by_name(model_name)
         if not model_id:
             self.logger.warning(f"Model ID não encontrado para '{model_name}'. Pulando registro.")
             return False
-        
+
         if not request_id:
             request_id = str(uuid.uuid4())
-        
+
         payload = {
             "product_id": self.config.product_id,
             "environment_id": self.environment_id,
@@ -344,6 +359,7 @@ class AdminCenterService:
             "alert_metadata": {
                 "endpoint": endpoint_called or "/unknown",
                 "model_name": model_name,
+                **({"prompt_id": prompt_id} if prompt_id else {}),
                 **metadata
             }
         }
@@ -352,6 +368,8 @@ class AdminCenterService:
             payload["request_id"] = request_id
         if user_id:
             payload["user_id"] = user_id
+        if prompt_id:
+            payload["prompt_id"] = prompt_id
         
         if not self._validate_token_usage_payload(payload):
             return False
@@ -501,6 +519,166 @@ class AdminCenterService:
         # SEMPRE ASSÍNCRONO - nunca bloqueia a aplicação
         return self._enqueue_safely("log_process", payload)
     
+    # ==================== PROMPTS ====================
+
+    def get_prompt(self, slug: str, product_id: str = None) -> Optional[Dict]:
+        """
+        Busca prompt por slug no AdminCenter.
+        Permite que projetos usem prompts centralizados ao inves de hardcoded.
+
+        Args:
+            slug: Slug unico do prompt (ex: 'datachat-sql-agent')
+            product_id: ID do produto (usa o configurado se nao informado)
+
+        Returns:
+            Dict com dados do prompt (content, temperature, max_tokens, etc.) ou None
+        """
+        if not self.config.enabled:
+            return None
+
+        pid = product_id or self.config.product_id
+        endpoint = AdminCenterEndpoints.PROMPT_BY_SLUG.format(slug)
+        params = {"product_id": pid}
+
+        response = self._make_request("GET", endpoint, params=params)
+
+        if response and "data" in response:
+            self.logger.debug(f"Prompt '{slug}' carregado do AdminCenter")
+            return response["data"]
+
+        self.logger.warning(f"Prompt '{slug}' nao encontrado no AdminCenter")
+        return None
+
+    def get_prompt_by_id(self, prompt_id: str) -> Optional[Dict]:
+        """
+        Busca prompt por ID no AdminCenter.
+
+        Args:
+            prompt_id: UUID do prompt
+
+        Returns:
+            Dict com dados do prompt ou None
+        """
+        if not self.config.enabled:
+            return None
+
+        params = {"prompt_id": prompt_id}
+        response = self._make_request("GET", AdminCenterEndpoints.PROMPT_BY_ID, params=params)
+
+        if response and "data" in response:
+            return response["data"]
+
+        return None
+
+    def get_prompts(self, product_id: str = None, tags: List[str] = None,
+                    is_active: bool = True) -> List[Dict]:
+        """
+        Lista prompts de um produto no AdminCenter.
+
+        Args:
+            product_id: ID do produto (usa o configurado se nao informado)
+            tags: Filtrar por tags (ex: ['analise', 'geracao'])
+            is_active: Filtrar por status ativo (default True)
+
+        Returns:
+            Lista de prompts ou lista vazia
+        """
+        if not self.config.enabled:
+            return []
+
+        pid = product_id or self.config.product_id
+        endpoint = AdminCenterEndpoints.PROMPTS_BY_PRODUCT.format(pid)
+        params = {"is_active": str(is_active).lower()}
+
+        if tags:
+            params["tags"] = ",".join(tags)
+
+        response = self._make_request("GET", endpoint, params=params)
+
+        if response and "data" in response:
+            data = response["data"]
+            return data if isinstance(data, list) else []
+
+        return []
+
+    def get_effective_prompt(self, agent_slug: str, product_id: str = None) -> Optional[Dict]:
+        """
+        Resolve o prompt efetivo de um agente para um produto.
+
+        Retorna os prompts genéricos do agente (todos os vinculados, já concatenados
+        em generic_content) e, se existir, a customização do produto (custom_content).
+
+        Args:
+            agent_slug: Slug do agente (ex: 'sql-analyst', 'summarizer')
+            product_id: UUID do produto. Se omitido, usa ADMIN_CENTER_PRODUCT_ID do .env.
+
+        Returns:
+            Dict com os campos:
+              - generic_content: str  (prompts base do agente, prontos para system message)
+              - generic_prompts: list (lista dos prompts individuais com id, name, content)
+              - generic_temperature: float
+              - generic_max_tokens: int
+              - custom_content: str | None (instrução adicional do produto, se houver)
+              - is_customized: bool
+              - is_prompt_selection_active: bool
+              - selected_prompt_ids: list[str]
+            None se o agente não estiver vinculado ao produto.
+
+        Exemplo de uso:
+            ep = admin.get_effective_prompt('sql-analyst')
+            system_parts = [ep['generic_content']]
+            if ep.get('custom_content'):
+                system_parts.append(ep['custom_content'])
+            system_message = '\\n\\n---\\n\\n'.join(system_parts)
+        """
+        if not self.config.enabled:
+            return None
+
+        pid = product_id or self.config.product_id
+        endpoint = AdminCenterEndpoints.EFFECTIVE_PROMPT.format(pid, agent_slug)
+        response = self._make_request("GET", endpoint)
+
+        if response and "data" in response:
+            self.logger.debug(f"Effective prompt para agente '{agent_slug}' carregado")
+            return response["data"]
+
+        self.logger.warning(f"Agente '{agent_slug}' não vinculado ao produto {pid}")
+        return None
+
+    def log_prompt_usage(self, prompt_id: str, product_id: str = None,
+                         environment_id: str = None, request_id: str = None,
+                         variables_used: Dict = None, final_prompt: str = None,
+                         tokens_used: int = None, model_used: str = None) -> bool:
+        """
+        Registra uso de um prompt (para analytics por prompt).
+
+        Args:
+            prompt_id: UUID do prompt utilizado
+            variables_used: Variaveis substituidas no prompt (ex: {'empresa': 'CASAN'})
+            final_prompt: Prompt final apos substituicao de variaveis
+            tokens_used: Total de tokens consumidos
+            model_used: Nome do modelo LLM utilizado
+        """
+        if not self.config.enabled:
+            return False
+
+        payload = {
+            "product_id": product_id or self.config.product_id,
+            "environment_id": environment_id or self.environment_id,
+            "request_id": request_id or str(uuid.uuid4()),
+            "variables_used": variables_used or {},
+            "final_prompt": final_prompt[:2000] if final_prompt else None,
+            "tokens_used": tokens_used,
+            "model_used": model_used
+        }
+
+        # Remover None
+        payload = {k: v for k, v in payload.items() if v is not None}
+
+        # _prompt_id e usado pelo batch worker para montar o endpoint dinamico
+        payload["_prompt_id"] = prompt_id
+        return self._enqueue_safely("prompt_usage", payload)
+
     # ==================== BATCH PROCESSING OTIMIZADO ====================
     
     def _start_batch_worker(self):
@@ -539,19 +717,30 @@ class AdminCenterService:
             "token_usage": AdminCenterEndpoints.TOKEN_USAGE,
             "log_execution": AdminCenterEndpoints.LOG_EXECUTION,
             "log_application": AdminCenterEndpoints.LOG_APPLICATION,
-            "log_process": AdminCenterEndpoints.LOG_PROCESS
+            "log_process": AdminCenterEndpoints.LOG_PROCESS,
+            "prompt_usage": None  # endpoint dinamico, tratado abaixo
         }
         
         for endpoint_type, payload in batch:
             try:
                 endpoint = endpoint_map.get(endpoint_type)
+
+                # prompt_usage tem endpoint dinamico com prompt_id
+                if endpoint_type == "prompt_usage":
+                    prompt_id = payload.pop("_prompt_id", None)
+                    if prompt_id:
+                        endpoint = AdminCenterEndpoints.PROMPT_LOG_USAGE.format(prompt_id)
+                    else:
+                        self.logger.debug("prompt_usage sem prompt_id, ignorando")
+                        continue
+
                 if endpoint:
                     response = self._make_request("POST", endpoint, payload)
                     if response:
                         success_count += 1
                     else:
                         self.logger.debug(f"Falha ao enviar {endpoint_type} - continuando processamento")
-                        
+
             except Exception as e:
                 self.logger.debug(f"Erro ao processar item do batch {endpoint_type}: {e}")
         
