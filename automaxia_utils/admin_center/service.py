@@ -94,7 +94,7 @@ class AdminCenterEndpoints:
     # Prompts
     PROMPT_BY_SLUG = "/prompt/{}"
     PROMPT_BY_ID = "/prompt/consulta_id"
-    PROMPTS_BY_PRODUCT = "/product/{}/prompts"
+    PROMPTS_LIST = "/prompt/listar"
     PROMPT_LOG_USAGE = "/prompt/{}/log-usage"
     # Agents
     EFFECTIVE_PROMPT = "/product/{}/agent/{}/effective-prompt"
@@ -521,14 +521,14 @@ class AdminCenterService:
     
     # ==================== PROMPTS ====================
 
-    def get_prompt(self, slug: str, product_id: str = None) -> Optional[Dict]:
+    def get_prompt(self, slug: str, organization_id: str = None) -> Optional[Dict]:
         """
         Busca prompt por slug no AdminCenter.
         Permite que projetos usem prompts centralizados ao inves de hardcoded.
 
         Args:
             slug: Slug unico do prompt (ex: 'datachat-sql-agent')
-            product_id: ID do produto (usa o configurado se nao informado)
+            organization_id: ID da organização (usa o configurado se nao informado)
 
         Returns:
             Dict com dados do prompt (content, temperature, max_tokens, etc.) ou None
@@ -536,9 +536,9 @@ class AdminCenterService:
         if not self.config.enabled:
             return None
 
-        pid = product_id or self.config.product_id
+        org_id = organization_id or self.config.organization_id
         endpoint = AdminCenterEndpoints.PROMPT_BY_SLUG.format(slug)
-        params = {"product_id": pid}
+        params = {"organization_id": org_id}
 
         response = self._make_request("GET", endpoint, params=params)
 
@@ -570,13 +570,14 @@ class AdminCenterService:
 
         return None
 
-    def get_prompts(self, product_id: str = None, tags: List[str] = None,
-                    is_active: bool = True) -> List[Dict]:
+    def get_prompts(self, organization_id: str = None, agent_id: str = None,
+                    tags: List[str] = None, is_active: bool = True) -> List[Dict]:
         """
-        Lista prompts de um produto no AdminCenter.
+        Lista prompts no AdminCenter.
 
         Args:
-            product_id: ID do produto (usa o configurado se nao informado)
+            organization_id: ID da organização (usa o configurado se nao informado)
+            agent_id: ID do agente para filtrar prompts vinculados (opcional)
             tags: Filtrar por tags (ex: ['analise', 'geracao'])
             is_active: Filtrar por status ativo (default True)
 
@@ -586,9 +587,15 @@ class AdminCenterService:
         if not self.config.enabled:
             return []
 
-        pid = product_id or self.config.product_id
-        endpoint = AdminCenterEndpoints.PROMPTS_BY_PRODUCT.format(pid)
+        endpoint = AdminCenterEndpoints.PROMPTS_LIST
         params = {"is_active": str(is_active).lower()}
+
+        org_id = organization_id or self.config.organization_id
+        if org_id:
+            params["organization_id"] = org_id
+
+        if agent_id:
+            params["agent_id"] = agent_id
 
         if tags:
             params["tags"] = ",".join(tags)
