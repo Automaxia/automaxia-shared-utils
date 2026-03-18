@@ -204,7 +204,39 @@ print(f"Tokens estimados: {estimativa['estimated_total_tokens']}")
 print(f"Custo estimado: ${estimativa['cost_usd']:.6f}")
 ```
 
-### 5. Admin Center Service
+### 5. Prompt Efetivo por Agente (NOVO v1.1.0)
+
+Resolve o prompt efetivo de um agente, combinando prompts genericos e customizacoes do produto:
+
+```python
+from automaxia_utils import get_admin_center_service
+
+admin = get_admin_center_service()
+
+# Buscar prompt efetivo do agente
+ep = admin.get_effective_prompt("sql-analyst")
+
+# Montar system message com conteudo generico + customizacao
+system_parts = [ep["generic_content"]]
+if ep.get("custom_content"):
+    system_parts.append(ep["custom_content"])
+system_message = "\n\n---\n\n".join(system_parts)
+
+# Campos disponiveis:
+# ep["generic_content"]              -> str: prompts base concatenados
+# ep["generic_prompts"]              -> list: prompts individuais (id, name, content)
+# ep["generic_temperature"]          -> float
+# ep["generic_max_tokens"]           -> int
+# ep["custom_content"]               -> str | None: instrucao adicional do produto
+# ep["is_customized"]                -> bool
+# ep["is_prompt_selection_active"]   -> bool
+# ep["selected_prompt_ids"]          -> list[str]
+
+# Tambem aceita product_id explicito
+ep = admin.get_effective_prompt("sql-analyst", product_id="uuid-do-produto")
+```
+
+### 6. Admin Center Service
 
 ```python
 from automaxia_utils import get_admin_center_service
@@ -227,17 +259,24 @@ admin.log_application("error", "Falha na conexao", context={"host": "db.local"})
 # Log de execucao HTTP
 admin.log_execution("/api/users", "GET", 200, response_time_ms=45)
 
-# Log de uso de prompt
+# Log de uso de prompt (com parametros opcionais)
 admin.log_prompt_usage(
     prompt_id="uuid-do-prompt",
     variables_used={"empresa": "CASAN", "area": "saneamento"},
     final_prompt="Voce e um assistente de CASAN...",
     tokens_used=1500,
-    model_used="gpt-4o"
+    model_used="gpt-4o",
+    product_id="uuid-do-produto",         # opcional, usa .env se omitido
+    environment_id="uuid-do-ambiente",     # opcional, usa .env se omitido
+    request_id="uuid-do-request"           # opcional, auto-gerado se omitido
 )
+
+# Invalidar cache de modelos
+admin.invalidate_model_cache("gpt-4o")    # modelo especifico
+admin.invalidate_model_cache()             # todo o cache
 ```
 
-### 6. Decorator para Tracking Automatico
+### 7. Decorator para Tracking Automatico
 
 ```python
 from automaxia_utils import track_execution
@@ -249,7 +288,7 @@ def processar_pedido(pedido_id):
     return resultado
 ```
 
-### 7. LangChain Integration
+### 8. LangChain Integration
 
 ```python
 from automaxia_utils import LangChainTokenCallback
@@ -260,7 +299,7 @@ llm = OpenAI(callbacks=[callback])
 # Tokens sao automaticamente rastreados
 ```
 
-### 8. Context Manager
+### 9. Context Manager
 
 ```python
 from automaxia_utils import AdminCenterContext
@@ -310,7 +349,7 @@ with AdminCenterContext() as admin:
 
 | Funcao | Descricao |
 |--------|-----------|
-| `track_api_response(response, model, ...)` | Tracking universal - detecta provider automaticamente |
+| `track_api_response(response, model, ...)` | Tracking universal - detecta provider automaticamente. Params extras: `prompt_text`, `prompt_id`, `force_provider` |
 | `estimate_tokens_and_cost(prompt, model)` | Estimativa previa de tokens e custos |
 | `count_tokens_smart(text, model)` | Contagem inteligente multi-nivel |
 | `count_tokens_litellm(text, model)` | Contagem via LiteLLM (100+ modelos) |
@@ -331,6 +370,8 @@ with AdminCenterContext() as admin:
 | `log_application(level, message)` | Log de aplicacao |
 | `log_execution(endpoint, method, ...)` | Log de execucao HTTP |
 | `log_process(name, status, ...)` | Log de processo |
+| `get_effective_prompt(agent_slug, product_id)` | Resolve prompt efetivo do agente (generico + custom) |
+| `invalidate_model_cache(model_name)` | Invalida cache de modelo especifico ou todo o cache |
 | `flush()` | Forca envio de items pendentes |
 | `shutdown()` | Finaliza o servico |
 
@@ -430,7 +471,10 @@ if prompt is None:
 - Contagem de tokens multi-nivel (LiteLLM + APIs nativas + tiktoken)
 - Calculo de custos via LiteLLM (100+ modelos atualizados)
 - Gerenciamento de prompts centralizados (get_prompt, get_prompts, log_prompt_usage)
+- Prompt efetivo por agente (get_effective_prompt) com suporte a customizacao por produto
 - Parametro prompt_id para vincular tracking ao prompt
+- Parametros force_provider e prompt_text em track_api_response()
+- Invalidacao de cache de modelos (invalidate_model_cache)
 - Suporte a Google Gemini (contagem + extracao)
 - Precos fallback atualizados (GPT-4o, Claude 4, Gemini 2.0)
 - Extras de instalacao: [providers], [all]
