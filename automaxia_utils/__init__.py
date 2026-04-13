@@ -2,7 +2,7 @@
 Automaxia Utils - Pacote compartilhado
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __author__ = "Automaxia"
 
 # Importar de admin_center
@@ -29,6 +29,15 @@ from .token_tracking import (
     invalidate_model_price_cache
 )
 
+# Importar de auth
+from .auth import (
+    AdminCenterAuth,
+    AdminCenterAuthConfig,
+    get_current_user as get_authenticated_user,
+    require_product_access,
+    login_via_admincenter,
+)
+
 __all__ = [
     # Admin Center
     "AdminCenterService",
@@ -37,7 +46,7 @@ __all__ = [
     "reset_admin_center_service",
     "AdminCenterContext",
     "track_execution",
-    
+
     # Token Tracking
     "track_api_response",
     "track_openai_call",
@@ -49,4 +58,11 @@ __all__ = [
     "HybridTokenCounter",
     "LangChainTokenCallback",
     "invalidate_model_price_cache",
+
+    # Auth Middleware
+    "AdminCenterAuth",
+    "AdminCenterAuthConfig",
+    "get_authenticated_user",
+    "require_product_access",
+    "login_via_admincenter",
 ]
