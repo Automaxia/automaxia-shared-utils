@@ -1,6 +1,31 @@
-# Automaxia Utils v1.1.0
+# Automaxia Utils v1.4.0
 
-Pacote compartilhado para rastreamento de tokens de IA, gerenciamento de prompts centralizados e integracao com Admin Center API.
+Pacote compartilhado para rastreamento de tokens de IA, gerenciamento de prompts centralizados, agendamento de jobs e integracao com Admin Center API.
+
+## Novidades v1.4.0
+
+- **`JobRunner`**: scheduler local controlado pelo painel de Jobs Agendados do AdminCenter. Suporta cron, pause/resume, "rodar agora" via webhook, reporte de progresso ao vivo (lido pelo painel via SSE).
+- **Modo `test|live`**: toda request agora propaga `X-AdminCenter-Mode` como fallback ao claim do JWT. O modo e' inferido automaticamente do prefixo da API key (`sk_test_*` / `sk_live_*`) ou pode ser forcado via `ADMIN_CENTER_MODE` no .env.
+- **Dependencias novas**: `APScheduler>=3.10.0` e `croniter>=2.0.0` (apenas para quem usa o `JobRunner`; import e' lazy).
+
+### Uso rapido do JobRunner
+
+```python
+from automaxia_utils import get_admin_center_service, JobRunner
+
+runner = JobRunner(get_admin_center_service())
+runner.register("rpa_boletos.rodada", _rodada)
+runner.register("rpa_boletos.relatorio", _relatorio)
+runner.start(block=True)   # APScheduler local + servidor HTTP de webhook
+```
+
+Dentro de um handler, reporte progresso com:
+
+```python
+runner.report_progress(percent=30, message="Baixando boletos")
+```
+
+Detalhes em `automaxia_utils/admin_center/jobs.py`.
 
 ## Instalacao
 

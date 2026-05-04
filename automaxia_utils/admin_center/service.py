@@ -174,12 +174,37 @@ class AdminCenterService:
             raise
     
     def _setup_session(self):
-        """Configura sessão HTTP reutilizável"""
+        """Configura sessão HTTP reutilizável.
+
+        O JWT emitido por /auth/gerar-token/api-key ja carrega o claim `mode`
+        derivado do prefixo da chave (sk_live_* ou sk_test_*), entao o backend
+        resolve o silo automaticamente. Mesmo assim, propagamos o header
+        X-AdminCenter-Mode como fallback explicito — util para debug e quando
+        o produto quer forcar um modo (via env ADMIN_CENTER_MODE).
+        """
         self._session = requests.Session()
-        self._session.headers.update({
+        headers = {
             "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        })
+            "Content-Type": "application/json",
+        }
+        mode = self._resolve_mode_header()
+        if mode:
+            headers["X-AdminCenter-Mode"] = mode
+        self._session.headers.update(headers)
+
+    def _resolve_mode_header(self) -> Optional[str]:
+        """Determina o modo (test|live) a propagar nas requests.
+        Ordem: env explicita > prefixo da api_key > None (deixa o backend
+        deduzir do JWT)."""
+        explicit = os.getenv("ADMIN_CENTER_MODE", "").strip().lower()
+        if explicit in ("test", "live"):
+            return explicit
+        api_key = self.config.api_key or ""
+        if api_key.startswith("sk_test_"):
+            return "test"
+        if api_key.startswith("sk_live_"):
+            return "live"
+        return None
     
     def _make_request(self, method: str, endpoint: str, data: Dict = None, 
                      params: Dict = None, retry_count: int = 0) -> Optional[Dict]:
