@@ -30,14 +30,21 @@ from .token_tracking import (
     invalidate_model_price_cache
 )
 
-# Importar de auth
-from .auth import (
-    AdminCenterAuth,
-    AdminCenterAuthConfig,
-    get_current_user as get_authenticated_user,
-    require_product_access,
-    login_via_admincenter,
-)
+# Importar de auth — depende de FastAPI, que e' opcional. Produtos que sao
+# clientes (ex.: ischolar, RPAs) nao precisam de FastAPI; o auth/middleware so
+# faz sentido em servicos que expoem API HTTP. Se nao estiver instalado,
+# pula silenciosamente em vez de quebrar o import do pacote inteiro.
+try:
+    from .auth import (
+        AdminCenterAuth,
+        AdminCenterAuthConfig,
+        get_current_user as get_authenticated_user,
+        require_product_access,
+        login_via_admincenter,
+    )
+    _AUTH_AVAILABLE = True
+except ImportError:
+    _AUTH_AVAILABLE = False
 
 __all__ = [
     # Admin Center
@@ -60,11 +67,13 @@ __all__ = [
     "HybridTokenCounter",
     "LangChainTokenCallback",
     "invalidate_model_price_cache",
-
-    # Auth Middleware
-    "AdminCenterAuth",
-    "AdminCenterAuthConfig",
-    "get_authenticated_user",
-    "require_product_access",
-    "login_via_admincenter",
 ]
+
+if _AUTH_AVAILABLE:
+    __all__ += [
+        "AdminCenterAuth",
+        "AdminCenterAuthConfig",
+        "get_authenticated_user",
+        "require_product_access",
+        "login_via_admincenter",
+    ]
