@@ -14,7 +14,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="automaxia-utils",
-    version="1.4.0",
+    version="1.5.0",
     author="Automaxia",
     author_email="dev@automaxia.com",
     description="Utilitários compartilhados para rastreamento de tokens e integração com Admin Center",
@@ -46,11 +46,19 @@ setup(
             "anthropic>=0.25.0",
             "google-generativeai>=0.5.0"
         ],
+        "database": [
+            "psycopg2-binary>=2.9.0",
+            "sqlalchemy>=2.0.0",
+            "sshtunnel>=0.4.0"
+        ],
         "all": [
             "langchain>=0.1.0",
             "langchain-community>=0.0.13",
             "anthropic>=0.25.0",
-            "google-generativeai>=0.5.0"
+            "google-generativeai>=0.5.0",
+            "psycopg2-binary>=2.9.0",
+            "sqlalchemy>=2.0.0",
+            "sshtunnel>=0.4.0"
         ],
         "dev": [
             "pytest>=7.0.0",

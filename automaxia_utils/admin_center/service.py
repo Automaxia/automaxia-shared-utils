@@ -98,6 +98,8 @@ class AdminCenterEndpoints:
     PROMPT_LOG_USAGE = "/prompt/{}/log-usage"
     # Agents
     EFFECTIVE_PROMPT = "/product/{}/agent/{}/effective-prompt"
+    # Database Connections (broker central)
+    DATABASE_CONNECTION_RESOLVE = "/database-connection/resolve"
 
 
 class AdminCenterService:
@@ -124,7 +126,11 @@ class AdminCenterService:
         
         self._model_cache = {}
         self._cache_lock = Lock()
-        
+
+        # Resolver de conexoes de banco (lazy — instanciado no primeiro uso)
+        self._connection_resolver = None
+        self._connection_resolver_lock = Lock()
+
         if self.config.enabled and self.config.is_valid():
             self._initialize()
         elif self.config.enabled:
@@ -346,13 +352,85 @@ class AdminCenterService:
         }
         
         response = self._make_request("GET", AdminCenterEndpoints.SECRET_DECRYPT, params=params)
-        
+
         if response and "data" in response:
             return response["data"].get("decrypted_value")
-        
+
         self.logger.debug(f"Secret '{secret_name}' não encontrado")
         return None
-    
+
+    # ====================================================
+    # DATABASE CONNECTIONS — broker centralizado
+    # ====================================================
+
+    def _get_connection_resolver(self):
+        """Lazy: cria `ConnectionResolver` na primeira chamada."""
+        if self._connection_resolver is None:
+            with self._connection_resolver_lock:
+                if self._connection_resolver is None:
+                    # Import local — evita custo no startup quando o produto
+                    # nao usa conexoes de banco do AdminCenter.
+                    from .connections import ConnectionResolver
+                    self._connection_resolver = ConnectionResolver(self)
+        return self._connection_resolver
+
+    def resolve_connection(
+        self,
+        alias: Optional[str] = None,
+        connection_id: Optional[str] = None,
+        force_refresh: bool = False,
+    ):
+        """Resolve credenciais decriptadas de uma conexao cadastrada no
+        AdminCenter.
+
+        Args:
+            alias: identificador da conexao (slug). Ex: 'casan_prod'.
+            connection_id: UUID da conexao (alternativo ao alias).
+            force_refresh: ignora cache em memoria.
+
+        Returns:
+            `ResolvedConnection` ou None se nao encontrada / sem permissao.
+        """
+        if not self.config.enabled:
+            return None
+        return self._get_connection_resolver().resolve(
+            alias=alias,
+            connection_id=connection_id,
+            force_refresh=force_refresh,
+        )
+
+    def get_db_connection(self, alias: str, **psycopg2_kwargs):
+        """Abre conexao psycopg2 para o alias informado.
+
+        Cuida de tunel SSH/Cloudflare automaticamente quando a conexao
+        cadastrada usa tunel.
+
+        Returns:
+            `psycopg2.extensions.connection`. Lembre de fechar (`with` block
+            ou `conn.close()`).
+        """
+        return self._get_connection_resolver().get_psycopg2(alias, **psycopg2_kwargs)
+
+    def get_db_engine(self, alias: str, **engine_kwargs):
+        """Cria SQLAlchemy `Engine` para o alias. Descarte com `.dispose()`."""
+        return self._get_connection_resolver().get_engine(alias, **engine_kwargs)
+
+    def get_db_session(self, alias: str, **engine_kwargs):
+        """Context manager: abre `Engine` + `Session`, commita no exit ou
+        rollback em caso de excecao, depois fecha tudo.
+
+        Uso::
+
+            with admin.get_db_session('casan_prod') as session:
+                session.execute(text('SELECT 1'))
+        """
+        return self._get_connection_resolver().get_session(alias, **engine_kwargs)
+
+    def invalidate_connection_cache(self, alias: Optional[str] = None) -> None:
+        """Limpa o cache de conexoes resolvidas. Sem alias, limpa tudo."""
+        if self._connection_resolver is not None:
+            self._connection_resolver.invalidate(alias)
+
     def track_token_usage(self, model_name: str, prompt_tokens: int,
                          completion_tokens: int, request_id: str = None,
                          user_id: str = None, endpoint_called: str = None,
@@ -815,10 +893,17 @@ class AdminCenterService:
         # Aguardar worker por tempo limitado
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=2)  # Máximo 2 segundos
-        
+
+        # Fecha tuneis SSH abertos pelo ConnectionResolver, se houver
+        if self._connection_resolver is not None:
+            try:
+                self._connection_resolver.shutdown()
+            except Exception as e:
+                self.logger.warning(f"Erro ao finalizar ConnectionResolver: {e}")
+
         if self._session:
             self._session.close()
-        
+
         self.logger.info("Admin Center Service finalizado rapidamente")
     
     def __del__(self):
