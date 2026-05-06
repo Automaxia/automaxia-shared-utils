@@ -2,7 +2,7 @@
 Automaxia Utils - Pacote compartilhado
 """
 
-__version__ = "1.2.0"
+__version__ = "1.4.0"
 __author__ = "Automaxia"
 
 # Importar de admin_center
@@ -12,7 +12,9 @@ from .admin_center import (
     get_admin_center_service,
     reset_admin_center_service,
     AdminCenterContext,
-    track_execution
+    track_execution,
+    ResolvedConnection,
+    ConnectionResolver,
 )
 
 # Importar de token_tracking
@@ -46,6 +48,8 @@ __all__ = [
     "reset_admin_center_service",
     "AdminCenterContext",
     "track_execution",
+    "ResolvedConnection",
+    "ConnectionResolver",
 
     # Token Tracking
     "track_api_response",
