@@ -29,13 +29,14 @@ import tiktoken
 # IMPORTS OPCIONAIS
 # ============================================
 
-try:
-    import litellm
-    from litellm import token_counter as litellm_token_counter
-    from litellm import cost_per_token as litellm_cost_per_token
-    LITELLM_AVAILABLE = True
-except ImportError:
-    LITELLM_AVAILABLE = False
+import importlib.util as _importlib_util
+
+# LiteLLM e' carregado sob demanda dentro das funcoes que usam token_counter,
+# cost_per_token ou model_cost. Importar no topo dispara o boot do LiteLLM,
+# que tenta pre-carregar shapes de AWS Bedrock/SageMaker e emite warnings
+# para projetos que so usam o AdminCenter (sem features de LLM/billing).
+LITELLM_AVAILABLE = _importlib_util.find_spec("litellm") is not None
+if not LITELLM_AVAILABLE:
     logging.warning("LiteLLM nao disponivel. Usando tiktoken como fallback.")
 
 try:
@@ -200,6 +201,7 @@ def count_tokens_litellm(
     if not LITELLM_AVAILABLE:
         return None
     try:
+        from litellm import token_counter as litellm_token_counter
         messages = _normalize_to_messages(text_or_messages)
         count = litellm_token_counter(model=model, messages=messages)
         logging.debug(f"LiteLLM token count para '{model}': {count}")
@@ -515,6 +517,7 @@ class HybridTokenCounter:
         if not LITELLM_AVAILABLE:
             return None
         try:
+            from litellm import cost_per_token as litellm_cost_per_token
             # Regular input = total menos tokens de cache (evita cobranca dupla)
             regular_input = max(0, prompt_tokens - cache_read_tokens - cache_creation_tokens)
             prompt_cost, completion_cost = litellm_cost_per_token(
@@ -545,6 +548,7 @@ class HybridTokenCounter:
 
         model_info: Dict[str, Any] = {}
         try:
+            import litellm
             model_info = litellm.model_cost.get(self.model) or {}
         except Exception:
             model_info = {}
