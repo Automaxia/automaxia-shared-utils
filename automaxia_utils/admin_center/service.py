@@ -75,10 +75,17 @@ class AdminCenterConfig:
         )
     
     def is_valid(self) -> bool:
-        """Verifica se a configuração é válida"""
+        """Verifica se a configuração é válida.
+
+        A partir da migration 0022 do AdminCenter, `product_id`,
+        `environment_id` e `organization_id` podem vir do JWT emitido em
+        /auth/gerar-token/api-key (quando a chave for escopada). Por isso,
+        nao sao mais obrigatorios no .env — sao preenchidos automaticamente
+        em `_get_access_token`. Aqui exigimos so URL e api_key.
+        """
         if not self.enabled:
             return True
-        return all([self.api_url, self.api_key, self.product_id, self.environment_id])
+        return all([self.api_url, self.api_key])
 
 
 class AdminCenterEndpoints:
@@ -163,18 +170,44 @@ class AdminCenterService:
             self.config.enabled = False
     
     def _get_access_token(self):
-        """Obtém token de acesso usando API key"""
+        """Obtém token de acesso usando API key.
+
+        A resposta do AdminCenter (migration 0022) carrega
+        organization_id/product_id/environment_id derivados do escopo da
+        chave. Quando esses campos vem populados, preenchem o config — entao
+        o produto consumidor nao precisa mais defini-los no .env. Valores
+        vindos do .env continuam vencendo (compat com produtos legados que
+        querem forcar um escopo diferente).
+        """
         url = f"{self.config.api_url}{AdminCenterEndpoints.AUTH_TOKEN}"
         headers = {'api-key': self.config.api_key}
-        
+
         try:
             response = requests.post(url, headers=headers, timeout=self.config.timeout)
             response.raise_for_status()
-            
+
             data = response.json()
-            self.access_token = data['data']['access_token']
-            self.logger.info("Token de acesso obtido com sucesso")
-            
+            payload = data.get('data') or {}
+            self.access_token = payload['access_token']
+
+            # Auto-preenche escopo a partir do JWT response quando nao
+            # houver valor explicito no .env. Vide migration 0022 e
+            # /auth/gerar-token/api-key.
+            if not self.config.organization_id and payload.get('organization_id'):
+                self.config.organization_id = payload['organization_id']
+            if not self.config.product_id and payload.get('product_id'):
+                self.config.product_id = payload['product_id']
+            if not self.config.environment_id and payload.get('environment_id'):
+                self.config.environment_id = payload['environment_id']
+                # `environment_id` resolvido pelo helper precisa refletir o novo valor.
+                self.environment_id = self._resolve_environment_id()
+
+            self.logger.info(
+                "Token de acesso obtido com sucesso "
+                f"(org={self.config.organization_id}, product={self.config.product_id}, "
+                f"env={self.environment_id})"
+            )
+
         except Exception as e:
             self.logger.error(f"Erro ao obter token: {e}")
             raise
@@ -537,26 +570,110 @@ class AdminCenterService:
                 self.logger.debug("Todo cache de modelos invalidado")
 
     def log_application(self, level: str, message: str, stack_trace: str = None,
-                       context: Dict = None) -> bool:
+                       context: Dict = None,
+                       logger_name: str = None, module_name: str = None,
+                       function_name: str = None, line_number: int = None,
+                       exception_type: str = None, exception_message: str = None) -> bool:
         """
         Registra log de aplicação - SEMPRE ASSÍNCRONO
+
+        Campos top-level (logger_name, module_name, function_name, line_number,
+        exception_*) batem 1-pra-1 com a tabela application_logs e ficam
+        consultáveis sem ter que abrir o JSON. O resto vai pra extra_data.
         """
         if not self.config.enabled:
             return False
-        
+
+        # Quando este log e' emitido de dentro de um handler de job, injeta
+        # run_id + job_slug em extra_data automaticamente. Isso permite que
+        # a UI filtre `application_logs` por execucao especifica (sem
+        # depender de substring na mensagem). Import lazy pra evitar
+        # circular: service.py <- jobs.py <- service.py.
+        merged_extra = dict(context or {})
+        try:
+            from .jobs import current_run_context  # noqa: PLC0415
+            ctx = current_run_context()
+            if ctx:
+                # Nao sobrescreve se o caller ja preencheu — respeita override explicito.
+                if ctx.run_id and 'run_id' not in merged_extra:
+                    merged_extra['run_id'] = ctx.run_id
+                if ctx.job_slug and 'job_slug' not in merged_extra:
+                    merged_extra['job_slug'] = ctx.job_slug
+        except Exception:
+            pass
+
         payload = {
             "product_id": self.config.product_id,
             "environment_id": self.environment_id,
             "log_level": level.upper(),
+            "logger_name": logger_name,
+            "module_name": module_name,
+            "function_name": function_name,
+            "line_number": line_number,
             "message": message,
+            "exception_type": exception_type,
+            "exception_message": exception_message,
             "stack_trace": stack_trace,
-            "context": context or {},
+            # Backend espera o campo como `extra_data` (jsonb na tabela
+            # application_logs). Mantendo `context` por compat com clientes
+            # antigos da lib, mas o backend so vai indexar `extra_data`.
+            "extra_data": merged_extra,
+            "context": merged_extra,
             "timestamp": datetime.utcnow().isoformat()
         }
         
         # SEMPRE ASSÍNCRONO - nunca bloqueia a aplicação
         return self._enqueue_safely("log_application", payload)
-    
+
+    def get_application_logs(self,
+                             log_level: Optional[str] = None,
+                             logger_name: Optional[str] = None,
+                             message: Optional[str] = None,
+                             data_inicio: Optional[str] = None,
+                             data_fim: Optional[str] = None,
+                             extra_data_filter: Optional[Dict[str, Any]] = None,
+                             pagina: int = 0,
+                             tamanho_pagina: int = 0) -> List[Dict[str, Any]]:
+        """Consulta application_logs do AdminCenter (sincrono).
+
+        Filtros opcionais. `extra_data_filter` aceita pares chave/valor sobre o
+        jsonb extra_data — match exato (ex.: {"status": "enviado",
+        "mes_referencia": "Abril/2026"}). `data_inicio`/`data_fim` em
+        formato 'YYYY-MM-DD'. Devolve lista de dicts; vazia quando nada bate.
+        """
+        if not self.config.enabled:
+            return []
+
+        params: Dict[str, Any] = {
+            "product_id": self.config.product_id,
+            "environment_id": self.environment_id,
+        }
+        if log_level:        params["log_level"] = log_level
+        if logger_name:      params["logger_name"] = logger_name
+        if message:          params["message"] = message
+        if data_inicio:      params["data_inicio"] = data_inicio
+        if data_fim:         params["data_fim"] = data_fim
+        if pagina > 0:       params["pagina"] = pagina
+        if tamanho_pagina > 0: params["tamanho_pagina"] = tamanho_pagina
+        if extra_data_filter:
+            params["extra_data_filter"] = ",".join(
+                f"{k}={v}" for k, v in extra_data_filter.items() if v is not None
+            )
+
+        try:
+            resp = self._make_request("GET", AdminCenterEndpoints.LOG_APPLICATION,
+                                      params=params)
+        except Exception as e:
+            self.logger.warning(f"get_application_logs falhou: {e}")
+            return []
+
+        if not resp:
+            return []
+        data = resp.get("data") if isinstance(resp, dict) else resp
+        if isinstance(data, dict) and "items" in data:
+            data = data["items"]
+        return data or []
+
     def log_execution(self, endpoint: str, method: str, status_code: int,
                      response_time_ms: int, error: str = None) -> bool:
         """

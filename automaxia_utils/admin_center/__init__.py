@@ -6,7 +6,7 @@ from .service import (
     AdminCenterContext,
     track_execution
 )
-from .jobs import JobRunner
+from .jobs import JobRunner, JobCancelled
 from .connections import ResolvedConnection, ConnectionResolver
 
 __all__ = [
@@ -17,6 +17,7 @@ __all__ = [
     "AdminCenterContext",
     "track_execution",
     "JobRunner",
+    "JobCancelled",
     "ResolvedConnection",
     "ConnectionResolver",
 ]

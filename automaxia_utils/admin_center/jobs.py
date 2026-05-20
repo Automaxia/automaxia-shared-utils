@@ -92,6 +92,35 @@ class _RunContext:
     job_slug: str
     started_at: float
     triggered_by: str = "cron"
+    # Sinalizador de cancelamento cooperativo. O handler do produto deve
+    # consultar via runner.is_cancelled() / raise_if_cancelled() em loops e
+    # etapas longas. Setado pelo handler do webhook /control quando o
+    # AdminCenter empurra event=='job.cancel_run'.
+    cancel_event: "threading.Event" = field(default_factory=threading.Event)
+    cancel_reason: Optional[str] = None
+
+
+# Thread-local em escopo de modulo: serve para que log_application() do
+# AdminCenterService possa injetar run_id/job_slug no extra_data sem precisar
+# de uma referencia ao JobRunner (que viraria import circular). E populado
+# pela run_job() na mesma thread em que o handler do produto executa.
+_module_ctx_local = threading.local()
+
+
+def current_run_context() -> Optional["_RunContext"]:
+    """Devolve o _RunContext da execucao em curso na thread atual, ou None.
+    Usado por integracoes que precisam correlacionar saidas (logs, metricas)
+    com o run que as gerou — sem expor a instancia do JobRunner."""
+    return getattr(_module_ctx_local, 'ctx', None)
+
+
+class JobCancelled(Exception):
+    """Levantado por raise_if_cancelled() quando o operador clicou em "Parar".
+
+    Capturado pelo run_job() que reporta o run com status='cancelled' ao
+    AdminCenter. O handler do produto pode capturar para fazer cleanup
+    proprio antes — basta re-levantar (ou nao, se ja terminou tudo)."""
+    pass
 
 
 # ---------- JobRunner ----------
@@ -121,6 +150,12 @@ class JobRunner:
         # Run context — armazenado em variavel de thread local para que
         # report_progress() do produto pegue automaticamente
         self._run_ctx_local = threading.local()
+
+        # Mapa global de execucoes ativas por run_id. Usado pelo handler
+        # de webhook /control para localizar o ctx e disparar cancel_event
+        # de outra thread (handler webhook) na thread do job.
+        self._active_runs: Dict[str, _RunContext] = {}
+        self._active_runs_lock = threading.Lock()
 
         # APScheduler
         self._scheduler = None
@@ -211,6 +246,11 @@ class JobRunner:
             if cfg.slug not in self._handlers:
                 logger.debug("JobRunner: ignorando %s (sem handler local)", cfg.slug)
                 continue
+            # Job manual-only (sem cron) nao entra no APScheduler — so executa
+            # via webhook 'job.run_now' do AdminCenter.
+            if not cfg.cron_expression:
+                logger.debug("JobRunner: %s sem cron — manual-only", cfg.slug)
+                continue
             try:
                 trigger = CronTrigger.from_crontab(cfg.cron_expression, timezone=cfg.timezone)
                 self._scheduler.add_job(
@@ -237,8 +277,15 @@ class JobRunner:
 
     # ---------- Disparo manual / por webhook ----------
 
-    def run_job(self, slug: str, triggered_by: str = "manual") -> bool:
-        """Executa o job referente ao slug. Reporta inicio/progresso/fim ao AdminCenter."""
+    def run_job(self, slug: str, triggered_by: str = "manual",
+                existing_run_id: Optional[str] = None) -> bool:
+        """Executa o job referente ao slug. Reporta inicio/progresso/fim ao AdminCenter.
+
+        Quando `existing_run_id` for fornecido, usa ele em vez de criar um novo
+        via POST /agent/job/{job_id}/run. Necessario para fluxos onde o backend
+        ja criou o run (ex.: trigger-with-attachment) — caso contrario o agente
+        criaria um run paralelo, deixando o original orfao em 0%.
+        """
         with self._lock:
             cfg = self._jobs.get(slug)
 
@@ -252,11 +299,15 @@ class JobRunner:
             logger.warning("JobRunner: job %s desabilitado ou pausado, pulando", slug)
             return False
 
-        # Cria run no AdminCenter
-        run_id = self._create_run(cfg.id, triggered_by)
-        if not run_id:
-            # Mesmo sem run_id, tenta executar (modo offline) — reporta no fim se houver chance
-            logger.warning("JobRunner: falha ao criar run no AdminCenter, executando localmente sem tracking")
+        if existing_run_id:
+            run_id = existing_run_id
+            logger.info("JobRunner: reutilizando run %s (criado pelo backend)", run_id)
+        else:
+            # Cria run no AdminCenter
+            run_id = self._create_run(cfg.id, triggered_by)
+            if not run_id:
+                # Mesmo sem run_id, tenta executar (modo offline) — reporta no fim se houver chance
+                logger.warning("JobRunner: falha ao criar run no AdminCenter, executando localmente sem tracking")
 
         ctx = _RunContext(
             run_id=run_id or "",
@@ -267,9 +318,26 @@ class JobRunner:
         )
         # Disponibiliza o contexto para report_progress no thread atual
         self._run_ctx_local.ctx = ctx
+        # Espelha em modulo-level pra log_application() correlacionar logs do
+        # produto com o run em curso (sem precisar de ref ao runner).
+        _module_ctx_local.ctx = ctx
+
+        # Registra no mapa global para o webhook /control conseguir localizar
+        # esta execucao por run_id e disparar cancel_event de outra thread.
+        if run_id:
+            with self._active_runs_lock:
+                self._active_runs[run_id] = ctx
 
         try:
             self._handlers[slug]()
+        except JobCancelled:
+            duration_ms = int((time.time() - ctx.started_at) * 1000)
+            logger.info("JobRunner: job %s cancelado por solicitacao do operador", slug)
+            if run_id:
+                self._finish_run(run_id, status="cancelled",
+                                 duration_ms=duration_ms,
+                                 error_message=ctx.cancel_reason or "Cancelado pelo operador")
+            return False
         except Exception as e:
             duration_ms = int((time.time() - ctx.started_at) * 1000)
             logger.exception("JobRunner: job %s falhou", slug)
@@ -280,12 +348,65 @@ class JobRunner:
             return False
         else:
             duration_ms = int((time.time() - ctx.started_at) * 1000)
+            # Mesmo se o handler nao cooperou e voltou normal, se cancel_event
+            # foi setado durante a execucao reportamos como cancelled — assim
+            # o painel reflete o que o operador pediu.
+            if ctx.cancel_event.is_set():
+                if run_id:
+                    self._finish_run(run_id, status="cancelled", duration_ms=duration_ms,
+                                     error_message=ctx.cancel_reason or "Cancelado pelo operador")
+                logger.info("JobRunner: job %s terminou normal apos pedido de cancelamento — reportado como cancelled", slug)
+                return False
+
             if run_id:
                 self._finish_run(run_id, status="completed", duration_ms=duration_ms)
             logger.info("JobRunner: job %s concluido em %dms", slug, duration_ms)
             return True
         finally:
             self._run_ctx_local.ctx = None
+            _module_ctx_local.ctx = None
+            if run_id:
+                with self._active_runs_lock:
+                    self._active_runs.pop(run_id, None)
+
+    # ---------- API publica de cancelamento (chamada pelo handler) ----------
+
+    def is_cancelled(self) -> bool:
+        """Retorna True quando o operador solicitou parada da execucao atual.
+
+        Handlers devem consultar periodicamente em loops/etapas longas. Se
+        ignorado, o run fica 'cancelling' no painel ate o handler terminar
+        ou o timeout estourar."""
+        ctx = getattr(self._run_ctx_local, 'ctx', None)
+        if not ctx:
+            return False
+        return ctx.cancel_event.is_set()
+
+    def raise_if_cancelled(self) -> None:
+        """Atalho para abortar com excecao quando cancelamento foi pedido.
+
+        Equivale a `if self.is_cancelled(): raise JobCancelled(...)`. O
+        run_job() captura JobCancelled e reporta status='cancelled' ao
+        AdminCenter automaticamente."""
+        if self.is_cancelled():
+            raise JobCancelled("cancelamento solicitado pelo operador")
+
+    def _cancel_run(self, run_id: str, reason: Optional[str] = None) -> bool:
+        """Sinaliza o ctx do run informado para sair (chamado pelo webhook).
+
+        Retorna True se o run estava em andamento e foi sinalizado, False se
+        nao foi encontrado (ja terminou ou nao pertence a este processo)."""
+        if not run_id:
+            return False
+        with self._active_runs_lock:
+            ctx = self._active_runs.get(run_id)
+        if not ctx:
+            logger.info("JobRunner: cancel ignorado, run %s nao esta ativo neste processo", run_id)
+            return False
+        ctx.cancel_reason = reason
+        ctx.cancel_event.set()
+        logger.info("JobRunner: cancel signalizado para run=%s slug=%s", run_id, ctx.job_slug)
+        return True
 
     # ---------- Reportes para AdminCenter ----------
 
@@ -394,10 +515,15 @@ class JobRunner:
                 logger.info("[Webhook] %s recebido para %s", event, slug or job_id)
 
                 if event == 'job.run_now' and slug:
+                    # Backend pode mandar run_id quando ja criou o run aqui
+                    # (ex.: trigger-with-attachment). Honramos pra nao criar
+                    # um run paralelo deixando o original orfao em 0%.
+                    payload_run_id = payload.get('run_id')
                     # Roda em thread separada para responder o webhook rapido
                     threading.Thread(
                         target=runner_ref.run_job,
                         args=(slug, 'manual'),
+                        kwargs={'existing_run_id': payload_run_id} if payload_run_id else {},
                         daemon=True
                     ).start()
                 elif event in ('job.paused', 'job.resumed', 'job.config_changed'):
@@ -405,6 +531,12 @@ class JobRunner:
                         target=runner_ref.reload_jobs,
                         daemon=True
                     ).start()
+                elif event == 'job.cancel_run':
+                    # Cancelamento cooperativo: sinaliza o ctx do run para o
+                    # handler consultar via runner.is_cancelled(). Idempotente.
+                    run_id = payload.get('run_id')
+                    reason = payload.get('reason')
+                    runner_ref._cancel_run(run_id, reason)
 
                 self.send_response(202)
                 self.send_header('Content-Type', 'application/json')
@@ -463,13 +595,19 @@ class JobRunner:
 
     # ---------- Lifecycle ----------
 
-    def start(self, with_webhook_server: bool = True, with_polling: bool = True,
+    def start(self, with_webhook_server: bool = True, with_polling: bool = False,
               block: bool = True) -> None:
         """Inicializa scheduler local + servidor de webhook + polling.
 
         Args:
-            with_webhook_server: sobe servidor HTTP em ADMIN_CENTER_JOBS_WEBHOOK_PORT
-            with_polling: sobe thread de fallback que reconfere config a cada N segundos
+            with_webhook_server: sobe servidor HTTP em ADMIN_CENTER_JOBS_WEBHOOK_PORT.
+                                 Canal principal — AdminCenter empurra eventos
+                                 (job.run_now, job.config_changed, job.cancel_run...).
+            with_polling: sobe thread de fallback que reconfere config a cada
+                          `polling_interval` segundos. Padrao OFF — so habilite quando
+                          o agente nao consegue expor o webhook (NAT/firewall sem
+                          ingresso publico). Com webhook saudavel, polling e redundante
+                          e gera GETs /api/agent/job continuos no AdminCenter.
             block: bloqueia a thread principal (igual APScheduler.BlockingScheduler).
                    Se False, retorna logo apos iniciar (para uso em apps com seu
                    proprio loop principal).

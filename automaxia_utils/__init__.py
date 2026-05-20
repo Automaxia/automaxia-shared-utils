@@ -2,7 +2,7 @@
 Automaxia Utils - Pacote compartilhado
 """
 
-__version__ = "1.5.0"
+__version__ = "1.7.0"
 __author__ = "Automaxia"
 
 # Importar de admin_center
@@ -14,6 +14,7 @@ from .admin_center import (
     AdminCenterContext,
     track_execution,
     JobRunner,
+    JobCancelled,
     ResolvedConnection,
     ConnectionResolver,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "AdminCenterContext",
     "track_execution",
     "JobRunner",
+    "JobCancelled",
     "ResolvedConnection",
     "ConnectionResolver",
 
