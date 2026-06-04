@@ -1,7 +1,10 @@
 # spec.md — automaxia-shared-utils
 
-Especificação técnica da lib Python `automaxia_utils` (versão **1.5.0**).
-Reflete o estado atual do código.
+Especificação técnica da lib Python `automaxia_utils` (versão **1.7.0**).
+Reflete o estado atual do código, sincronizado com o backend até a
+migration `0023_dedup_roles_unique_null` (RBAC 100% permission-based no
+painel — não impacta a lib, que consome apenas `/auth/*`, `/agent/*`,
+`/log/*`, `/secret/*`, `/database-connection/*`).
 
 ---
 
@@ -72,7 +75,7 @@ get_admin_center_service, reset_admin_center_service
 AdminCenterContext, track_execution
 
 # JobRunner
-JobRunner
+JobRunner, JobCancelled
 
 # Database connections (broker centralizado)
 ResolvedConnection, ConnectionResolver
@@ -104,9 +107,9 @@ Submódulos privados — uso direto não é garantido entre versões.
 |---|---|---|
 | `api_url` | — | `ADMIN_CENTER_URL` (ou `ADMIN_CENTER_URL_LOCAL` se `ENVIRONMENT=development`) |
 | `api_key` | — | `ADMIN_CENTER_API_KEY` |
-| `organization_id` | — | `ADMIN_CENTER_ORGANIZATION_ID` |
-| `product_id` | — | `ADMIN_CENTER_PRODUCT_ID` |
-| `environment_id` | — | `ADMIN_CENTER_ENVIRONMENT_ID` |
+| `organization_id` | — | `ADMIN_CENTER_ORGANIZATION_ID` *(opcional desde 1.7.0)* |
+| `product_id` | — | `ADMIN_CENTER_PRODUCT_ID` *(opcional desde 1.7.0)* |
+| `environment_id` | — | `ADMIN_CENTER_ENVIRONMENT_ID` *(opcional desde 1.7.0)* |
 | `enabled` | true | `ADMIN_CENTER_ENABLED` |
 | `batch_mode` | true | `ADMIN_CENTER_BATCH_MODE` |
 | `batch_size` | 50 | `ADMIN_CENTER_BATCH_SIZE` |
@@ -114,11 +117,19 @@ Submódulos privados — uso direto não é garantido entre versões.
 | `timeout` | 10 | `ADMIN_CENTER_TIMEOUT` |
 | `max_retries` | 2 | `ADMIN_CENTER_MAX_RETRIES` |
 
+`is_valid()` exige apenas `api_url + api_key` (1.7.0+). A partir da migration
+0022 do AdminCenter, `organization_id`/`product_id`/`environment_id` são
+auto-preenchidos a partir do JWT response em `_get_access_token`: quando a
+API key for escopada no painel, esses campos vêm populados e a lib não
+precisa mais lê-los do `.env`. Valores explícitos no `.env` continuam
+vencendo (compat com produtos legados que forçam escopo distinto).
+
 ### 5.2 Métodos principais
 
 | Método | Backend endpoint | Async? |
 |---|---|---|
-| `log_application(level, message, context)` | `POST /api/log/application` | sim (fila) |
+| `log_application(level, message, context, logger_name?, module_name?, function_name?, line_number?, exception_type?, exception_message?, stack_trace?)` | `POST /api/log/application` | sim (fila) |
+| `get_application_logs(log_level?, logger_name?, message?, data_inicio?, data_fim?, extra_data_filter?, pagina?, tamanho_pagina?)` | `GET /api/logs/application` | sync |
 | `log_execution(endpoint, method, status_code, response_time_ms)` | `POST /api/log/execution` | sim (fila) |
 | `log_process(process_name, status, duration_ms, ...)` | `POST /api/log/process` | sim (fila) |
 | `get_secret(name)` | `GET /api/secret?name=` | sync |
@@ -151,6 +162,34 @@ Submódulos privados — uso direto não é garantido entre versões.
 Logs e usage de tokens entram numa `queue.Queue`. Worker thread daemon
 desempilha e despacha em lote (`batch_size=50` ou `batch_interval=2s`).
 `flush()` força drain síncrono — útil em testes e shutdown.
+
+### 5.4.1 Application logs estruturados (1.7.0)
+
+`log_application` aceita campos top-level que batem 1-pra-1 com colunas
+indexáveis em `application_logs` no AdminCenter:
+
+```python
+admin.log_application(
+    level='ERROR',
+    message='falha ao enviar boleto',
+    logger_name='rpa_boletos.envio',
+    module_name='envio',
+    function_name='enviar',
+    line_number=132,
+    exception_type='HTTPError',
+    exception_message='timeout após 30s',
+    stack_trace=traceback.format_exc(),
+    context={'cliente_id': 42, 'tentativa': 3},   # vai pra extra_data
+)
+```
+
+`context` (ou `extra_data`) vira jsonb consultável via
+`extra_data_filter={'cliente_id': 42}` em `get_application_logs`. Quando
+o log é emitido **de dentro de um handler de job**, a lib injeta
+`run_id` + `job_slug` automaticamente em `extra_data` — permite filtrar
+logs por execução específica no painel sem depender de substring na
+mensagem. A correlação é feita por `current_run_context()` em
+`jobs.py` (thread-local).
 
 ### 5.5 Helpers de uso
 
@@ -256,46 +295,89 @@ pip install "automaxia-utils[database]"   # psycopg2-binary + sqlalchemy + sshtu
 
 ## 7. JobRunner (`admin_center/jobs.py`)
 
-### 6.1 Contrato esperado pelos produtos
+### 7.1 Contrato esperado pelos produtos
 
 ```python
-from automaxia_utils import JobRunner, get_admin_center_service
+from automaxia_utils import JobRunner, JobCancelled, get_admin_center_service
 
 runner = JobRunner(get_admin_center_service())
 runner.register("rpa_boletos.rodada", _rodada)
 runner.register("rpa_boletos.relatorio", _relatorio)
-runner.start(block=True)
+runner.start(block=True)  # default: webhook only, polling off
 
 # Dentro do handler:
 runner.report_progress(percent=30, message="Baixando boletos")
+
+# Em loops longos — cancelamento cooperativo (1.7.0+):
+for boleto in boletos:
+    runner.raise_if_cancelled()      # levanta JobCancelled se operador clicou em Parar
+    enviar(boleto)
 ```
 
-### 6.2 Componentes
+### 7.2 Componentes
 
 - **HTTP listener** (FastAPI): `0.0.0.0:8001`, rotas `POST /control` e
   `GET /healthz`. Validação HMAC-SHA256 do header `X-AdminCenter-Signature`
   contra `ADMIN_CENTER_JOBS_WEBHOOK_SECRET`.
-- **Polling**: a cada 30s, `GET /api/agent/job?product_id=&environment_id=`.
-  Reconcilia `APScheduler` local com config remota (cria/remove/reschedule
-  por `config_version`); processa `force_run_at` como fallback de webhook.
+- **Polling** (opt-in desde 1.7.0): `GET /api/agent/job?product_id=&environment_id=`
+  a cada N segundos. Default: **OFF** (`start(with_polling=False)`). Habilite só
+  quando o agente não conseguir expor o webhook (NAT/firewall sem ingresso).
+  Quando ligado, reconcilia `APScheduler` local com config remota (cria/
+  remove/reschedule por `config_version`) e processa `force_run_at` como
+  fallback de webhook.
 - **APScheduler local**: cron resiliente — se AdminCenter cair, jobs
   continuam disparando.
+  - **Jobs manual-only** (1.7.0+): `cron_expression` vazio/null no Job não
+    entra no APScheduler. Só executa via webhook `job.run_now` (botão
+    "Rodar agora" no painel).
 - **Run lifecycle**:
   1. `POST /api/agent/job/{id}/run` → cria `process_execution_logs`,
      devolve `run_id`.
+     - Quando o webhook traz `run_id` no payload (ex.: trigger-with-attachment
+       já cria o run), `run_job(existing_run_id=…)` reutiliza esse run em
+       vez de criar paralelo — evita execução órfã em 0%.
   2. Executa o handler em thread separada.
   3. `runner.report_progress(percent, message)` → `PATCH /api/agent/job/run/{run_id}/progress`.
-  4. `POST /api/agent/job/run/{run_id}/finish` com `status='completed'|'failed'`.
+  4. `POST /api/agent/job/run/{run_id}/finish` com
+     `status='completed'|'failed'|'cancelled'`.
 - **HMAC do webhook**: `expected = HMAC-SHA256(body, secret).hex()` →
   `hmac.compare_digest`.
 
-### 6.3 Eventos do `/control`
+### 7.3 Eventos do `/control`
 
 | Evento | Reação |
 |---|---|
-| `job.run_now` | despacha handler em thread, responde 200 imediato |
+| `job.run_now` | despacha handler em thread; honra `run_id` no payload se vier |
 | `job.paused` | trigger sync de polling pra refrescar APScheduler |
 | `job.resumed` | idem |
+| `job.config_changed` | trigger sync de polling pra recarregar lista de jobs |
+| `job.cancel_run` (1.7.0+) | localiza ctx do run em `_active_runs` e seta `cancel_event` — cancelamento cooperativo, idempotente |
+
+### 7.4 Cancelamento cooperativo (1.7.0+)
+
+API pública chamada pelo handler dentro do loop principal:
+
+| Método | O que faz |
+|---|---|
+| `runner.is_cancelled()` | True se o operador clicou em **Parar** no painel para este run |
+| `runner.raise_if_cancelled()` | Atalho que levanta `JobCancelled` quando a flag está setada |
+| `JobCancelled` (exceção) | Capturada pelo `run_job` e reporta `status='cancelled'` ao AdminCenter automaticamente |
+
+Fluxo:
+
+1. Operador clica "Parar" → painel envia webhook `job.cancel_run` com `run_id`.
+2. `_cancel_run(run_id, reason)` seta `ctx.cancel_event` no `_RunContext`
+   do run alvo (thread-safe via `_active_runs_lock`).
+3. Handler consulta `is_cancelled()` / `raise_if_cancelled()` em pontos
+   adequados (entre iterações, antes de IO custoso).
+4. `run_job` captura `JobCancelled` → `_finish_run(status='cancelled',
+   error_message=ctx.cancel_reason)`.
+5. Se o handler não cooperou mas a flag ficou setada, o `run_job`
+   reporta `cancelled` mesmo quando o handler termina normal — pra
+   refletir o que o operador pediu.
+
+Handlers podem capturar `JobCancelled` para fazer cleanup próprio antes
+de re-levantar (ou suprimir se já terminou tudo).
 
 ---
 
@@ -388,6 +470,10 @@ ADMIN_CENTER_ENABLED=true
 ADMIN_CENTER_URL=https://admincenter-api.automaxia.com.br/api
 ADMIN_CENTER_URL_LOCAL=http://localhost:8002/api    # opcional, dev only
 ADMIN_CENTER_API_KEY=sk_test_…
+
+# Opcionais desde 1.7.0 — se a API key for escopada no painel,
+# a lib auto-preenche a partir do JWT response. Quando preenchidos
+# no .env, vencem o escopo da chave (override explicito).
 ADMIN_CENTER_ORGANIZATION_ID=…
 ADMIN_CENTER_PRODUCT_ID=…
 ADMIN_CENTER_ENVIRONMENT_ID=…
@@ -411,7 +497,8 @@ Histórico declarado no README:
 | v1.0.0 (2025-01-15) | Base: tracking + AdminCenterService |
 | v1.1.0 (2026-03-17) | Prompts centralizados + LiteLLM + Google Gemini |
 | v1.4.0 | JobRunner + modo test\|live + APScheduler + croniter |
-| v1.5.0 (atual, 2026-05-05) | Database connections broker (`ResolvedConnection`, `ConnectionResolver`, `resolve_connection`/`get_db_session`/`get_db_engine`/`get_db_connection` no `AdminCenterService`, túnel SSH/Cloudflare, extra `[database]`) |
+| v1.5.0 (2026-05-05) | Database connections broker (`ResolvedConnection`, `ConnectionResolver`, `resolve_connection`/`get_db_session`/`get_db_engine`/`get_db_connection` no `AdminCenterService`, túnel SSH/Cloudflare, extra `[database]`) |
+| v1.7.0 (atual, 2026-05-20) | Cancelamento cooperativo (`JobCancelled`, `is_cancelled`, `raise_if_cancelled`, webhook `job.cancel_run`); `existing_run_id` em `run_job` (evita run paralelo em trigger-with-attachment); jobs manual-only (sem cron); `start(with_polling=False)` por default (webhook é o canal principal); auto-população de `organization_id`/`product_id`/`environment_id` a partir do JWT response (migration 0022 do AdminCenter — `.env` desses IDs deixa de ser obrigatório); `log_application` com campos top-level (`logger_name`, `module_name`, `function_name`, `line_number`, `exception_*`) e injeção automática de `run_id`+`job_slug` em `extra_data` quando emitido de dentro de handler de job; `get_application_logs` síncrono com `extra_data_filter`; guia novo `docs/connecting-a-job.md`. Aderente ao backend até a migration `0023` (RBAC permission-based + role `super_admin`, `role_products` M:N, drop de `group_roles.product_id`/`user_role_assignments.product_id`) — sem mudanças de contrato no lado da lib, que consome apenas endpoints `/agent/*` autenticados por API key. |
 
 Versão fica em `setup.py:__version__` e exportada em
 `automaxia_utils.__version__`. Ainda **sem CHANGELOG.md separado** e **sem

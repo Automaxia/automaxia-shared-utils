@@ -53,6 +53,29 @@ Backlog técnico da lib. Atualize ao concluir/criar itens.
 - [x] Lifecycle de run (start → progress → finish) integrado.
 - [x] `report_progress(percent, message, step_name)` com run-id local-thread.
 - [x] APScheduler local resiliente — jobs disparam mesmo se AdminCenter cair.
+- [x] **Cancelamento cooperativo (1.7.0)**: `JobCancelled`, `is_cancelled()`,
+      `raise_if_cancelled()`, webhook `job.cancel_run`, mapa `_active_runs`
+      thread-safe; `run_job` reporta `status='cancelled'` automaticamente.
+- [x] **`existing_run_id` em `run_job` (1.7.0)**: webhook `job.run_now` aceita
+      `run_id` no payload e reutiliza em vez de criar paralelo —
+      evita órfão em 0% no fluxo `trigger-with-attachment`.
+- [x] **Jobs manual-only (1.7.0)**: jobs sem `cron_expression` ficam fora do
+      APScheduler; executam só via webhook "Rodar agora".
+- [x] **`start(with_polling=False)` por default (1.7.0)**: webhook é o canal
+      principal; polling vira opt-in para ambientes sem ingresso.
+
+### AdminCenterService (1.7.0)
+- [x] Auto-população de `organization_id`/`product_id`/`environment_id` a
+      partir do JWT response em `_get_access_token` (migration 0022 do
+      AdminCenter). `is_valid()` agora exige só `api_url+api_key`.
+- [x] `log_application` com campos top-level (`logger_name`, `module_name`,
+      `function_name`, `line_number`, `exception_type`, `exception_message`,
+      `stack_trace`) batendo 1-a-1 com a tabela `application_logs`.
+- [x] Injeção automática de `run_id`+`job_slug` em `extra_data` quando
+      `log_application` é emitido dentro de handler de job
+      (`current_run_context()` em `jobs.py`, thread-local).
+- [x] `get_application_logs(...)` síncrono com filtros (level/logger/message/
+      datas/`extra_data_filter`) e paginação.
 
 ### Auth middleware
 - [x] `AdminCenterAuth` em modo LOCAL (HS256 + SECRET_KEY) e REMOTE.
@@ -89,6 +112,11 @@ Backlog técnico da lib. Atualize ao concluir/criar itens.
       `requirements.txt` dos produtos.
 - [ ] Documentar processo de release (bump em `setup.py`, tag, push, atualizar
       consumidores).
+- [x] Script `reinstall_in_consumers.ps1` (PowerShell) na raiz do repo:
+      varre uma raiz (`D:\Automaxia\clientes` por default), encontra todas as
+      venvs com `automaxia_utils` instalado e reinstala `--force-reinstall
+      --no-deps` apontando para a source local. Suporta `-DryRun` e `-Exclude`.
+      Útil em dev local pra propagar mudanças sem `pip install` manual por venv.
 
 ### JobRunner
 - [ ] Suíte de testes (HMAC mismatch, polling, force_run_at, lifecycle
@@ -160,8 +188,9 @@ Backlog técnico da lib. Atualize ao concluir/criar itens.
       produto, garantir que apenas um execute o job.
 - [ ] Suporte a **pré e pós-handlers** globais (ex.: rotação de log file por
       execução).
-- [ ] **Cancelamento de run em execução** (`POST /control` com `event:
-      job.cancel`) — útil para abortar via painel.
+- [x] ~~**Cancelamento de run em execução**~~ — implementado em **1.7.0** via
+      webhook `job.cancel_run` + API cooperativa (`JobCancelled`,
+      `is_cancelled`, `raise_if_cancelled`).
 - [ ] Suporte a **políticas de retry** definidas no painel.
 
 ### Auth
