@@ -51,15 +51,27 @@ class AdminCenterConfig:
         # URL principal (Prod)
         api_url = os.getenv(f"{prefix}_URL", "")
         
-        # Suporte a URL de desenvolvimento (Prioridade para DEV_URL, depois LOCAL)
+        # API key principal (Prod)
+        api_key = os.getenv(f"{prefix}_API_KEY", "")
+
+        # Suporte a URL/API key de desenvolvimento
         if environment == 'development':
+            # URL (Prioridade para DEV_URL, depois LOCAL)
             dev_url = os.getenv(f"{prefix}_DEV_URL") or os.getenv(f"{prefix}_URL_LOCAL")
             if dev_url:
                 api_url = dev_url
 
+            # API key de teste tem prioridade; aceita sufixo minusculo ou
+            # maiusculo (_test / _TEST). Se ausente, mantem a padrao.
+            api_key = (
+                os.getenv(f"{prefix}_API_KEY_test")
+                or os.getenv(f"{prefix}_API_KEY_TEST")
+                or api_key
+            )
+
         return cls(
             api_url=api_url,
-            api_key=os.getenv(f"{prefix}_API_KEY", ""),
+            api_key=api_key,
             product_id=os.getenv(f"{prefix}_PRODUCT_ID", ""),
             environment_id=os.getenv(f"{prefix}_ENVIRONMENT_ID", ""),
             organization_id=os.getenv(f"{prefix}_ORGANIZATION_ID", ""),
