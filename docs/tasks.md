@@ -23,6 +23,8 @@ Backlog técnico da lib. Atualize ao concluir/criar itens.
 - [x] `flush()` síncrono para drain manual.
 - [x] `AdminCenterContext` (context manager).
 - [x] `@track_execution` (decorator com lifecycle started/completed/failed).
+- [x] `log_process` herda `job_id` do run context (1.9.0) — vincula execução
+      ao job p/ faturamento (cobrança Meta opt-in por job). Aceita `job_id` explícito.
 
 ### Cofre & catálogo
 - [x] `get_secret(name)` (sem expor encriptados).

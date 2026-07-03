@@ -278,6 +278,13 @@ api_key = admin.get_secret("OPENAI_API_KEY")
 admin.log_process("import_data", "started", metadata={"source": "csv"})
 admin.log_process("import_data", "completed", duration_ms=1500)
 
+# Dentro de um handler de job (JobRunner), o job_id e' herdado automaticamente
+# do run context — o faturamento vincula a execucao ao job. Para cobrar
+# mensagens Meta (opt-in por job no painel), registre a quantidade enviada em
+# output_data (enviados | sent | messages_sent):
+admin.log_process("envio_whatsapp", "completed", duration_ms=800,
+                  output_data={"enviados": 120})
+
 # Log de aplicacao
 admin.log_application("error", "Falha na conexao", context={"host": "db.local"})
 
@@ -491,6 +498,15 @@ if prompt is None:
 ```
 
 ## Changelog
+
+### v1.9.0 (2026-07-02)
+- `log_process()` herda automaticamente o `job_id` do run context quando emitido
+  de dentro de um handler de job (via `JobRunner`). Isso permite ao faturamento do
+  AdminCenter vincular a execução ao job e aplicar a cobrança de mensagens Meta
+  (WhatsApp), que é **opt-in por job** no painel. `log_process()` também aceita
+  `job_id` explícito. Mudança backward-compatible (parâmetro opcional).
+- Para cobrar mensagens Meta, registre a quantidade enviada em `output_data`
+  sob `enviados`, `sent` ou `messages_sent`.
 
 ### v1.1.0 (2026-03-17)
 - Contagem de tokens multi-nivel (LiteLLM + APIs nativas + tiktoken)

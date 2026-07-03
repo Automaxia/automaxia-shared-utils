@@ -131,7 +131,7 @@ vencendo (compat com produtos legados que forçam escopo distinto).
 | `log_application(level, message, context, logger_name?, module_name?, function_name?, line_number?, exception_type?, exception_message?, stack_trace?)` | `POST /api/log/application` | sim (fila) |
 | `get_application_logs(log_level?, logger_name?, message?, data_inicio?, data_fim?, extra_data_filter?, pagina?, tamanho_pagina?)` | `GET /api/logs/application` | sync |
 | `log_execution(endpoint, method, status_code, response_time_ms)` | `POST /api/log/execution` | sim (fila) |
-| `log_process(process_name, status, duration_ms, ...)` | `POST /api/log/process` | sim (fila) |
+| `log_process(process_name, status, duration_ms, output_data?, job_id?, ...)` | `POST /api/log/process` | sim (fila) |
 | `get_secret(name)` | `GET /api/secret?name=` | sync |
 | `get_variable(environment_id?)` | `GET /api/environment/{env}/variables` | sync, cache |
 | `track_token_usage(model, prompt_tokens, completion_tokens, ...)` | `POST /api/token-usage/log` | sim (fila) |
@@ -190,6 +190,19 @@ o log é emitido **de dentro de um handler de job**, a lib injeta
 logs por execução específica no painel sem depender de substring na
 mensagem. A correlação é feita por `current_run_context()` em
 `jobs.py` (thread-local).
+
+### 5.4.2 Vínculo de execução ao job para faturamento (1.9.0)
+
+Pelo mesmo `current_run_context()`, `log_process()` (e `@track_execution`)
+herdam o `job_id` do run quando emitidos de dentro de um handler de job. O
+campo vai no payload de `POST /logs/process` e é persistido em
+`process_execution_logs.job_id`. Isso deixa o faturamento do AdminCenter
+vincular cada execução ao job de origem e aplicar a cobrança de mensagens
+Meta (WhatsApp), que é **opt-in por job** (`product_jobs.bill_meta_messages` +
+`meta_message_category`). A contagem de mensagens sai de `output_data`
+(`enviados` | `sent` | `messages_sent`). Fallback no painel: quando a execução
+não traz `job_id`, casa por `process_name == job.slug` (o runner grava
+`process_name = slug`).
 
 ### 5.5 Helpers de uso
 

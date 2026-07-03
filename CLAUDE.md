@@ -24,7 +24,7 @@ e fornecer infraestrutura compartilhada:
 - **Auth middleware**: `AdminCenterAuth` para FastAPI (JWT local ou remote)
   + `get_current_user` + `require_product_access`.
 
-Versão atual: **1.5.0**.
+Versão atual: **1.9.0**.
 
 ---
 
@@ -59,7 +59,7 @@ pip install "automaxia-utils[dev]"          # pytest, black, flake8, mypy, twine
 ```
 automaxia-shared-utils/
 ├── README.md                       # ~500 linhas com quickstart + exemplos
-├── setup.py                        # versão 1.4.0
+├── setup.py                        # versão 1.9.0
 ├── requirements.txt
 ├── automaxia_utils/
 │   ├── __init__.py                 # API pública re-exportada
@@ -128,6 +128,20 @@ chamado. Útil para apps que não precisam de scheduler.
 Logs (`log_application`, `log_execution`, `log_process`) e usage de tokens
 (`track_token_usage`) entram numa fila e um worker thread despacha em lote.
 Configurável via `AdminCenterConfig.batch_size` e `batch_interval`.
+
+### 5.2.1 Correlação com o job (run context) — faturamento
+
+Quando emitidos **de dentro de um handler de job** (executado pelo `JobRunner`),
+`log_application` injeta `run_id` + `job_slug` no `extra_data`, e `log_process`
+(logo `@track_execution` também) herda o **`job_id`** do run context via
+`current_run_context()` (thread-local em `jobs.py`, import lazy p/ evitar
+circular). Introduzido na **1.9.0**.
+
+Efeito no AdminCenter: cada `process_execution_logs` grava `job_id`, o que
+permite ao faturamento vincular a execução ao job e aplicar a **cobrança de
+mensagens Meta (WhatsApp), que é opt-in por job**. Para cobrar, o RPA registra a
+quantidade enviada em `output_data` (`enviados` | `sent` | `messages_sent`).
+`log_process(..., job_id=...)` também aceita override explícito.
 
 ### 5.3 Auth: API key → JWT
 
@@ -198,6 +212,41 @@ dessas deps — daí o extra opcional `[database]`.
 - Lifecycle de run: `POST /agent/job/{id}/run` → executa handler →
   `POST /agent/job/run/{run_id}/finish`.
 - Progresso: `runner.report_progress(percent, message)` → PATCH async.
+
+### 5.8 Effective-prompt: agente + prompt + modelo
+
+`AdminCenterService.get_effective_prompt(agent_slug, product_id=None)` resolve,
+**numa chamada**, o prompt do agente **e o modelo de IA** para o produto:
+
+- Prompt: `generic_content`, `generic_prompts`, `generic_temperature`,
+  `generic_max_tokens`, `custom_content`, `is_customized`, `selected_prompt_ids`…
+- **Modelo** (campos adicionados): `model_id`, `model_name`,
+  `model_display_name`, `is_model_overridden` — modelo **efetivo** (override do
+  produto → `agents.model_id`). O modelo mora no **agente**, não no prompt:
+  `get_prompt(slug)` **não** traz modelo.
+
+`track_token_usage` aceita `agent_slug` (e `model_name` virou **opcional**): sem
+`model_name`, resolve o modelo do agente via effective-prompt (cacheado em
+`_effective_model_cache`) — deixa `agents.model_id` autoritativo config→billing.
+`invalidate_effective_model_cache(agent_slug=None)` limpa o cache após trocar o
+modelo no painel. Assinatura retrocompatível (defaults nos positionais).
+
+Padrão de consumo (o produto usa o modelo do agente na inferência e no billing):
+
+```python
+ep = admin.get_effective_prompt('sql-analyst')
+system_message = ep['generic_content']
+modelo = ep.get('model_name')          # modelo configurado no agente
+# ... chama o LLM com `modelo` ...
+admin.track_token_usage(agent_slug='sql-analyst',
+                        prompt_tokens=pt, completion_tokens=ct)
+```
+
+> O `model_name` só chega no effective-prompt depois que o **admincenter-api**
+> estiver com o código novo (campos de modelo no `get_effective_prompt`) e o
+> agente tiver `model_id` configurado. Antes disso vem `None` → o produto cai no
+> modelo do `.env` (fallback). Consumidores já com wiring: `datachatai`
+> (automático) e o dashboard/insight do cockpit (opt-in via `DASHBOARD_AGENT_SLUG`).
 
 ---
 
@@ -301,6 +350,17 @@ import …`) é considerado privado e pode quebrar entre versões.
 - **Lazy deps de banco**: `psycopg2`, `sqlalchemy` e `sshtunnel` não vêm
   por default. Produtos que usam `get_db_*` devem instalar via extra
   `pip install "automaxia-utils[database]"`.
+- **Billing do cliente NÃO usa o custo gravado pela lib**: o
+  `estimated_cost` + `metadata.cost_brl/vlr_dolar` que o `track_token_usage`
+  grava (hierarquia LiteLLM → API → fallback) é referência **interna** de
+  custo do provedor. A fatura de IA é calculada no admincenter-api por
+  `token_usage.model_id` × custos cadastrados em `ai_models` — portanto o
+  que importa para o faturamento é (1) reportar o **modelo correto**
+  (`model_name`/`agent_slug`) no tracking e (2) manter os preços dos modelos
+  sincronizados no painel (sync LiteLLM). Mensagens Meta: contadas de
+  `output_data.enviados|sent|messages_sent` das execuções de jobs com
+  `bill_meta_messages=true`, ao preço de `product_jobs.meta_price_per_message`
+  (fallback: tabela por categoria).
 
 ---
 

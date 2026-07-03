@@ -139,11 +139,20 @@ class AdminCenterService:
         self._worker_thread = None
         self._shutdown = False
 
+        # Circuit breaker de autenticação. Quando renovar o token não resolve
+        # o 401 (ex.: SECRET_KEY divergente entre réplicas do admincenter-api),
+        # paramos de enviar por um tempo para não martelar o servidor em loop.
+        self._auth_cooldown_until = 0.0
+        self._auth_fail_streak = 0
+
         # Resolver environment_id baseado no ambiente
         self.environment_id = self._resolve_environment_id()
         self.environment_name = self.config.environment_name
         
         self._model_cache = {}
+        # Cache do modelo efetivo por agente (agents.model_id resolvido via
+        # effective-prompt). Chave: "<product_id>:<agent_slug>".
+        self._effective_model_cache = {}
         self._cache_lock = Lock()
 
         # Resolver de conexoes de banco (lazy — instanciado no primeiro uso)
@@ -260,8 +269,14 @@ class AdminCenterService:
     def _make_request(self, method: str, endpoint: str, data: Dict = None, 
                      params: Dict = None, retry_count: int = 0) -> Optional[Dict]:
         """Executa requisição HTTP com retry automático"""
+        # Circuit breaker: após falhas de auth persistentes, descartamos o envio
+        # imediatamente (sem tocar a rede) até o cooldown expirar. Evita o loop
+        # de auth+retry martelando o AdminCenter com requests fadadas a 401.
+        if time.time() < self._auth_cooldown_until:
+            return None
+
         url = f"{self.config.api_url}{endpoint}"
-        
+
         try:
             if data and self.logger.isEnabledFor(logging.DEBUG):
                 self.logger.debug(f"Enviando para {method} {endpoint}: {json.dumps(data, indent=2, default=str)}")
@@ -277,6 +292,9 @@ class AdminCenterService:
             self.logger.debug(f"Resposta {response.status_code} de {endpoint}")
             
             if response.status_code in [200, 201]:
+                # Sucesso: zera o circuit breaker de auth.
+                self._auth_fail_streak = 0
+                self._auth_cooldown_until = 0.0
                 return response.json()
             elif response.status_code == 422:
                 try:
@@ -286,11 +304,19 @@ class AdminCenterService:
                     self.logger.error(f"Erro de validação 422 em {endpoint}: {response.text}")
                 return None
             elif response.status_code == 401:
-                self.logger.warning("Token expirado, tentando renovar...")
-                self._get_access_token()
-                self._setup_session()
+                # 401 pode ser token expirado (renovar resolve) OU assinatura
+                # inválida — ex.: SECRET_KEY divergente entre réplicas do
+                # admincenter-api, em que renovar NÃO adianta. Renovamos no
+                # máximo 1x; se persistir, abrimos o circuit breaker em vez de
+                # ficar em loop de auth+retry.
                 if retry_count < 1:
+                    self.logger.warning("401 recebido, renovando token e tentando novamente...")
+                    self._get_access_token()
+                    self._setup_session()
                     return self._make_request(method, endpoint, data, params, retry_count + 1)
+                # Renovou e continuou 401 → falha persistente.
+                self._open_auth_circuit()
+                return None
             elif response.status_code >= 500 and retry_count < self.config.max_retries:
                 self.logger.warning(f"Erro servidor {response.status_code}, tentativa {retry_count + 1}")
                 time.sleep(2 ** retry_count)
@@ -311,6 +337,27 @@ class AdminCenterService:
             self.logger.warning(f"Erro de conexão final: {e}")
             return None
     
+    def _open_auth_circuit(self):
+        """Abre o circuit breaker de autenticação com backoff exponencial.
+
+        Acionado quando renovar o token não resolve o 401 (assinatura inválida).
+        Causa típica: `SECRET_KEY` diferente entre réplicas do admincenter-api,
+        em que o pod que assina o token não é o mesmo que valida. Enquanto o
+        circuit estiver aberto, `_make_request` descarta os envios sem tocar a
+        rede, evitando o flood de auth+retry. O backoff cresce a cada janela de
+        falha (30s, 60s, 120s ... teto de 5 min) e zera no primeiro sucesso.
+        """
+        self._auth_fail_streak += 1
+        cooldown = min(30 * (2 ** (self._auth_fail_streak - 1)), 300)
+        self._auth_cooldown_until = time.time() + cooldown
+        # Loga só na abertura e a cada 10 janelas, para não virar ruído próprio.
+        if self._auth_fail_streak == 1 or self._auth_fail_streak % 10 == 0:
+            self.logger.error(
+                "AdminCenter: 401 persistente após renovar token — pausando envios por "
+                f"{cooldown}s (falha #{self._auth_fail_streak}). Verifique se SECRET_KEY "
+                "é idêntica em todas as réplicas do admincenter-api."
+            )
+
     def _validate_token_usage_payload(self, payload: Dict) -> bool:
         """Valida payload de token usage antes do envio"""
         required_fields = ["product_id", "environment_id", "model_id", 
@@ -476,23 +523,41 @@ class AdminCenterService:
         if self._connection_resolver is not None:
             self._connection_resolver.invalidate(alias)
 
-    def track_token_usage(self, model_name: str, prompt_tokens: int,
-                         completion_tokens: int, request_id: str = None,
+    def track_token_usage(self, model_name: str = None, prompt_tokens: int = 0,
+                         completion_tokens: int = 0, request_id: str = None,
                          user_id: str = None, endpoint_called: str = None,
-                         prompt_id: str = None, metadata: Dict = {}) -> bool:
+                         prompt_id: str = None, metadata: Dict = {},
+                         agent_slug: str = None) -> bool:
         """
         Registra uso de tokens de IA - SEMPRE ASSÍNCRONO para máxima performance
 
         Args:
+            model_name: nome do modelo LLM usado (ex.: 'gpt-4o'). Se omitido e
+                        `agent_slug` for informado, cai no modelo configurado no
+                        agente (agents.model_id via effective-prompt) — torna a
+                        config do agente autoritativa de ponta a ponta.
+            agent_slug: slug do agente. Usado para resolver o modelo padrão
+                        quando `model_name` não é passado.
             prompt_id: ID do prompt cadastrado no AdminCenter (opcional).
                        Permite analytics de uso por prompt.
         """
         if not self.config.enabled:
             return False
 
-        model_id = self._get_model_id_by_name(model_name)
+        # Resolução do modelo: nome explícito do produto tem prioridade; senão,
+        # cai no modelo configurado no agente (effective-prompt, cacheado).
+        model_id = None
+        resolved_name = model_name
+        if model_name:
+            model_id = self._get_model_id_by_name(model_name)
+        elif agent_slug:
+            model_id, resolved_name = self._resolve_agent_model(agent_slug)
+
         if not model_id:
-            self.logger.warning(f"Model ID não encontrado para '{model_name}'. Pulando registro.")
+            self.logger.warning(
+                f"Model ID não resolvido (model_name='{model_name}', agent_slug='{agent_slug}'). "
+                "Pulando registro."
+            )
             return False
 
         if not request_id:
@@ -506,7 +571,8 @@ class AdminCenterService:
             "completion_tokens": completion_tokens,
             "alert_metadata": {
                 "endpoint": endpoint_called or "/unknown",
-                "model_name": model_name,
+                "model_name": resolved_name,
+                **({"agent_slug": agent_slug} if agent_slug else {}),
                 **({"prompt_id": prompt_id} if prompt_id else {}),
                 **metadata
             }
@@ -579,7 +645,50 @@ class AdminCenterService:
                 self.logger.debug(f"Cache invalidado para modelo: {model_name}")
             else:
                 self._model_cache.clear()
+                self._effective_model_cache.clear()
                 self.logger.debug("Todo cache de modelos invalidado")
+
+    def _resolve_agent_model(self, agent_slug: str, product_id: str = None):
+        """Resolve (model_id, model_name) do modelo EFETIVO configurado no agente
+        — override do produto (product_agents.model_id) → padrão do agente
+        (agents.model_id) — a partir do endpoint effective-prompt.
+
+        Cacheado por (product_id, agent_slug). Só cacheia quando há modelo
+        resolvido, para reautotentar assim que o modelo for configurado.
+
+        Retorna (None, None) quando o agente não tem modelo configurado.
+        """
+        pid = product_id or self.config.product_id
+        cache_key = f"{pid}:{agent_slug}"
+
+        with self._cache_lock:
+            cached = self._effective_model_cache.get(cache_key)
+        if cached is not None:
+            return cached.get("model_id"), cached.get("model_name")
+
+        ep = self.get_effective_prompt(agent_slug, product_id)
+        if not ep:
+            return None, None
+
+        model_id = ep.get("model_id")
+        model_name = ep.get("model_name") or ep.get("model_display_name")
+        if model_id:
+            with self._cache_lock:
+                self._effective_model_cache[cache_key] = {
+                    "model_id": model_id,
+                    "model_name": model_name,
+                }
+        return model_id, model_name
+
+    def invalidate_effective_model_cache(self, agent_slug: str = None, product_id: str = None):
+        """Invalida o cache do modelo efetivo do agente (chamar após mudar o
+        modelo do agente no AdminCenter)."""
+        with self._cache_lock:
+            if agent_slug:
+                pid = product_id or self.config.product_id
+                self._effective_model_cache.pop(f"{pid}:{agent_slug}", None)
+            else:
+                self._effective_model_cache.clear()
 
     def log_application(self, level: str, message: str, stack_trace: str = None,
                        context: Dict = None,
@@ -709,27 +818,45 @@ class AdminCenterService:
         return self._enqueue_safely("log_execution", payload)
     
     def log_process(self, process_name: str, status: str, duration_ms: int = None,
-               metadata: Dict = None, step_name: str = None, 
-               error_message: str = None, input_data: Dict = None, 
-               output_data: Dict = None) -> bool:
+               metadata: Dict = None, step_name: str = None,
+               error_message: str = None, input_data: Dict = None,
+               output_data: Dict = None, job_id: str = None) -> bool:
         """
         Registra log de processo de negócio - SEMPRE ASSÍNCRONO
+
+        job_id: normalmente não precisa ser informado. Quando o log é emitido
+        de dentro de um handler de job (via JobRunner), o job_id é herdado
+        automaticamente do run context — o que permite ao faturamento vincular
+        a execução ao job (cobrança de mensagens Meta é opt-in por job).
         """
         if not self.config.enabled:
             return False
-            
+
         try:
             product_uuid = UUID(self.config.product_id)
             environment_uuid = UUID(self.environment_id)
         except ValueError as e:
             self.logger.error(f"IDs inválidos: product_id={self.config.product_id}, environment_id={self.environment_id}")
             return False
-        
+
         now = datetime.utcnow()
-        
+
+        # Herda o job_id do run context quando emitido de dentro de um handler
+        # de job e o caller não passou explicitamente. Import lazy pra evitar
+        # circular: service.py <- jobs.py <- service.py. Override explícito manda.
+        if not job_id:
+            try:
+                from .jobs import current_run_context  # noqa: PLC0415
+                ctx = current_run_context()
+                if ctx and getattr(ctx, 'job_id', None):
+                    job_id = ctx.job_id
+            except Exception:
+                pass
+
         payload = {
             "product_id": str(product_uuid),
             "environment_id": str(environment_uuid),
+            "job_id": job_id,
             "process_name": process_name,
             "status": status.lower(),
             "started_at": now.isoformat() if status.lower() == "started" else None,
@@ -741,7 +868,7 @@ class AdminCenterService:
             "retry_count": 0,
             "process_metadata": metadata or {}
         }
-        
+
         if step_name:
             payload["step_name"] = step_name
         
@@ -861,7 +988,16 @@ class AdminCenterService:
               - is_customized: bool
               - is_prompt_selection_active: bool
               - selected_prompt_ids: list[str]
+              - model_id: str | None       (modelo de IA EFETIVO configurado: override
+                                            do produto → padrão do agente)
+              - model_name: str | None     (nome do modelo, ex.: 'gpt-4o')
+              - model_display_name: str | None
+              - is_model_overridden: bool  (True se o produto sobrescreveu o modelo do agente)
             None se o agente não estiver vinculado ao produto.
+
+        Use `model_name`/`model_id` para escolher o LLM na inferência e passe o
+        mesmo em `track_token_usage` (ou apenas informe `agent_slug` lá, que a lib
+        resolve o modelo do agente automaticamente).
 
         Exemplo de uso:
             ep = admin.get_effective_prompt('sql-analyst')
@@ -869,6 +1005,10 @@ class AdminCenterService:
             if ep.get('custom_content'):
                 system_parts.append(ep['custom_content'])
             system_message = '\\n\\n---\\n\\n'.join(system_parts)
+            modelo = ep.get('model_name')  # modelo configurado no agente
+            # ... chama o LLM com `modelo` ...
+            admin.track_token_usage(agent_slug='sql-analyst',
+                                    prompt_tokens=pt, completion_tokens=ct)
         """
         if not self.config.enabled:
             return None
