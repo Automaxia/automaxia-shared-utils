@@ -2,7 +2,7 @@
 Automaxia Utils - Pacote compartilhado
 """
 
-__version__ = "1.9.0"
+__version__ = "1.12.0"
 __author__ = "Automaxia"
 
 # Importar de admin_center
@@ -33,6 +33,24 @@ from .token_tracking import (
     invalidate_model_price_cache
 )
 
+# Importar de registration (auto-registro de produtos no AdminCenter)
+from .registration import (
+    ProductManifest,
+    ProductRegistrationConfig,
+    register_with_platform,
+    send_heartbeat,
+    start_heartbeat_loop,
+)
+
+# Migrations: alembic upgrade com retry, para o lifespan dos backends.
+# Import protegido — alembic e' dependencia so' de quem tem banco proprio
+# (RPAs e clientes puros nao instalam).
+try:
+    from .migrations import run_migrations
+    _MIGRATIONS_AVAILABLE = True
+except ImportError:
+    _MIGRATIONS_AVAILABLE = False
+
 # Importar de auth — depende de FastAPI, que e' opcional. Produtos que sao
 # clientes (ex.: ischolar, RPAs) nao precisam de FastAPI; o auth/middleware so
 # faz sentido em servicos que expoem API HTTP. Se nao estiver instalado,
@@ -44,6 +62,12 @@ try:
         get_current_user as get_authenticated_user,
         require_product_access,
         login_via_admincenter,
+        has_permission,
+        has_any_permission,
+        enrich_user_with_permissions,
+        require_permission,
+        require_any_permission,
+        invalidate_permission_cache,
     )
     _AUTH_AVAILABLE = True
 except ImportError:
@@ -73,7 +97,17 @@ __all__ = [
     "HybridTokenCounter",
     "LangChainTokenCallback",
     "invalidate_model_price_cache",
+
+    # Registration (auto-registro de produtos)
+    "ProductManifest",
+    "ProductRegistrationConfig",
+    "register_with_platform",
+    "send_heartbeat",
+    "start_heartbeat_loop",
 ]
+
+if _MIGRATIONS_AVAILABLE:
+    __all__ += ["run_migrations"]
 
 if _AUTH_AVAILABLE:
     __all__ += [
@@ -82,4 +116,10 @@ if _AUTH_AVAILABLE:
         "get_authenticated_user",
         "require_product_access",
         "login_via_admincenter",
+        "has_permission",
+        "has_any_permission",
+        "enrich_user_with_permissions",
+        "require_permission",
+        "require_any_permission",
+        "invalidate_permission_cache",
     ]

@@ -527,7 +527,8 @@ class AdminCenterService:
                          completion_tokens: int = 0, request_id: str = None,
                          user_id: str = None, endpoint_called: str = None,
                          prompt_id: str = None, metadata: Dict = {},
-                         agent_slug: str = None) -> bool:
+                         agent_slug: str = None, agent_id: str = None,
+                         area_agent_id: str = None) -> bool:
         """
         Registra uso de tokens de IA - SEMPRE ASSÍNCRONO para máxima performance
 
@@ -538,6 +539,11 @@ class AdminCenterService:
                         config do agente autoritativa de ponta a ponta.
             agent_slug: slug do agente. Usado para resolver o modelo padrão
                         quando `model_name` não é passado.
+            agent_id: ID do agente ETAPA executora (dimensão de custo por
+                      agente — colunas da migration 0036). Opcional; omitido
+                      do payload quando None.
+            area_agent_id: ID do agente ÁREA de negócio (segunda dimensão de
+                           custo). Opcional; omitido do payload quando None.
             prompt_id: ID do prompt cadastrado no AdminCenter (opcional).
                        Permite analytics de uso por prompt.
         """
@@ -584,7 +590,13 @@ class AdminCenterService:
             payload["user_id"] = user_id
         if prompt_id:
             payload["prompt_id"] = prompt_id
-        
+        # Dimensões de agente (migration 0036): etapa executora + área de
+        # negócio. Omitidas quando None para retrocompat com backends antigos.
+        if agent_id:
+            payload["agent_id"] = agent_id
+        if area_agent_id:
+            payload["area_agent_id"] = area_agent_id
+
         if not self._validate_token_usage_payload(payload):
             return False
         

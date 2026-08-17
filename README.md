@@ -499,6 +499,49 @@ if prompt is None:
 
 ## Changelog
 
+### v1.11.0 (2026-08-13)
+- **Helpers RBAC** (porte da v1.6 do Cockpit InfraBalance, adaptado ao
+  AdminCenter): `has_permission(user, perm, product_slug=None)`,
+  `has_any_permission`, `enrich_user_with_permissions`,
+  `require_permission(perm)` / `require_any_permission(perms)` (dependencies
+  FastAPI) e `invalidate_permission_cache`. Permissoes sao resolvidas via
+  `POST /auth/me/full` do AdminCenter com cache TTL de 60s;
+  `organization_permissions` valem para qualquer produto e
+  `products[].permissions` sao escopadas por `product_slug`. Super admin
+  bypassa toda checagem. Dependencies sao **fail-closed**: falha ao resolver
+  permissoes → 503 (respeitando `AUTH_PRODUCT_GATE_FAIL_OPEN=true` para
+  liberar). Novo campo `AuthenticatedUser.permission_detail` com o bloco
+  estruturado.
+- **Token tracking com dimensões de agente**: `track_token_usage()` aceita
+  `agent_id` (etapa executora) e `area_agent_id` (área de negócio) opcionais,
+  enviados no payload de `POST /token-usage/` quando presentes (colunas da
+  migration 0036 do AdminCenter). Retrocompat total: default `None`, omitidos
+  do payload.
+
+### v1.10.0 (2026-08-12)
+- **Novo modulo `automaxia_utils.registration`**: auto-registro de produtos no
+  AdminCenter (`POST /product/register`) + loop de heartbeat em thread daemon
+  (`POST /product/{code}/heartbeat`), portado do Cockpit InfraBalance.
+  Exports: `ProductManifest`, `ProductRegistrationConfig`,
+  `register_with_platform`, `send_heartbeat`, `start_heartbeat_loop`.
+  Manifesto inclui `mode` ('test'|'live'), `organization_slug` (obrigatorio na
+  primeira criacao) e `requires_instance`/`requires_connection` com default
+  `None` (nao sobrescreve valores ajustados na UI). Config via env:
+  `ADMIN_CENTER_URL` (override dev: `ADMIN_CENTER_DEV_URL`/`ADMIN_CENTER_URL_LOCAL`),
+  `PRODUCT_REGISTRATION_KEY`, `PRODUCT_REGISTRATION_TIMEOUT`,
+  `PRODUCT_HEARTBEAT_INTERVAL_SECONDS`, `PRODUCT_REGISTRATION_MAX_RETRIES`,
+  `PRODUCT_REGISTRATION_BACKOFF_SECONDS`.
+- **Auth (BREAKING em comportamento, nao em API): gate de produto agora e
+  fail-closed por default.** Se a validacao de acesso no AdminCenter falhar
+  (5xx, timeout, conexao), `require_product_access` e a validacao remota
+  retornam HTTP 503 em vez de liberar o acesso. Para restaurar o comportamento
+  antigo (liberar em falha), defina `AUTH_PRODUCT_GATE_FAIL_OPEN=true`.
+- Auth: resposta HTTP 200 com envelope `{success: false, status_code: 403}`
+  do backend legado agora conta como acesso negado (403).
+- Auth: `AuthenticatedUser` ganhou `is_super_admin: bool = False` e
+  `permissions: Optional[List[str]]`, populados dos claims do JWT ou da
+  resposta remota quando presentes (defaults seguros para tokens antigos).
+
 ### v1.9.0 (2026-07-02)
 - `log_process()` herda automaticamente o `job_id` do run context quando emitido
   de dentro de um handler de job (via `JobRunner`). Isso permite ao faturamento do

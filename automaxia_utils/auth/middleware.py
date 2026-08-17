@@ -71,6 +71,22 @@ class AdminCenterAuthConfig:
         )
 
 
+def _gate_fail_open() -> bool:
+    """Politica do gate de produto quando o AdminCenter esta indisponivel.
+
+    Default False = fail-closed: se nao da para validar o acesso, NEGA
+    (HTTP 503). Defina AUTH_PRODUCT_GATE_FAIL_OPEN=true para voltar ao
+    comportamento antigo (liberar em falha de rede) — use com consciencia,
+    apenas em ambientes onde disponibilidade importa mais que o gate.
+
+    Lido do ambiente a cada chamada (barato) para permitir toggle em
+    runtime/testes sem reiniciar o singleton.
+    """
+    return os.getenv("AUTH_PRODUCT_GATE_FAIL_OPEN", "false").strip().lower() in (
+        "true", "1", "yes",
+    )
+
+
 # =============================================
 # MODELS
 # =============================================
@@ -93,6 +109,15 @@ class AuthenticatedUser(BaseModel):
     last_name: Optional[str] = None
     status: Optional[str] = "active"
     product_access: Optional[ProductAccess] = None
+    # Claims novos do AdminCenter — podem nao existir em tokens antigos,
+    # por isso defaults seguros (sem privilegio).
+    is_super_admin: bool = False
+    permissions: Optional[List[str]] = None
+    # Detalhe estruturado de permissoes resolvido via POST /auth/me/full:
+    # {'organization_permissions': [...], 'products': {slug: [...]}}.
+    # Preenchido por enrich_user_with_permissions; None quando as permissoes
+    # vieram apenas da claim flat do JWT (sem escopo por produto).
+    permission_detail: Optional[Dict[str, Any]] = None
     raw_claims: Dict[str, Any] = {}
 
 
@@ -189,12 +214,22 @@ class AdminCenterAuth:
         """
         Valida token via chamada HTTP ao AdminCenter.
         Mais seguro (verifica status do usuario no banco), mas mais lento.
+
+        Retorna None quando o AdminCenter NEGA (401/403 — inclusive HTTP 200
+        com envelope {success: false, status_code: 403}, comportamento do
+        backend legado).
+
+        Quando o AdminCenter esta INDISPONIVEL (5xx, timeout, conexao
+        recusada), NAO libera: levanta HTTPException 503 (fail-closed).
+        Com AUTH_PRODUCT_GATE_FAIL_OPEN=true, degrada para validacao local
+        do JWT (se SECRET_KEY configurada) em vez de negar.
         """
         if not self.config.admincenter_url:
             logger.error("ADMIN_CENTER_URL nao configurada para validacao remota")
             return None
 
         url = f"{self.config.admincenter_url}/auth/validate-product-access"
+        unavailable_reason: Optional[str] = None
 
         try:
             session = self._get_session()
@@ -206,9 +241,13 @@ class AdminCenterAuth:
             )
 
             if response.status_code == 200:
-                data = response.json()
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = {}
                 if data.get("success"):
                     user_data = data.get("data", {})
+                    permissions = user_data.get("permissions")
                     user = AuthenticatedUser(
                         user_id=user_data.get("user_id", ""),
                         email=user_data.get("email", ""),
@@ -216,6 +255,8 @@ class AdminCenterAuth:
                         first_name=user_data.get("first_name"),
                         last_name=user_data.get("last_name"),
                         status=user_data.get("status", "active"),
+                        is_super_admin=bool(user_data.get("is_super_admin", False)),
+                        permissions=list(permissions) if isinstance(permissions, list) else None,
                         raw_claims=user_data,
                     )
 
@@ -232,18 +273,48 @@ class AdminCenterAuth:
 
                     return user
 
-            if response.status_code == 401:
+                # Envelope legado: HTTP 200 com success=false. O status real
+                # vem em body.status_code.
+                envelope_status = int(data.get("status_code") or 403)
+                if envelope_status in (401, 403):
+                    logger.warning(
+                        "Acesso negado pelo AdminCenter (envelope status=%s)",
+                        envelope_status,
+                    )
+                    return None
+                unavailable_reason = f"envelope success=false status={envelope_status}"
+            elif response.status_code == 401:
                 logger.info("Token rejeitado pelo AdminCenter (401)")
+                return None
             elif response.status_code == 403:
                 logger.warning("Acesso negado ao produto pelo AdminCenter (403)")
+                return None
             else:
-                logger.warning(f"AdminCenter retornou {response.status_code}")
-
-            return None
+                unavailable_reason = f"status={response.status_code}"
 
         except requests.RequestException as e:
-            logger.error(f"Erro ao validar token no AdminCenter: {e}")
+            unavailable_reason = str(e)
+
+        # AdminCenter indisponivel: NAO liberar por default (fail-closed).
+        logger.warning(
+            "Validacao remota indisponivel no AdminCenter (%s).", unavailable_reason
+        )
+        if _gate_fail_open():
+            if self.config.secret_key:
+                logger.warning(
+                    "AUTH_PRODUCT_GATE_FAIL_OPEN=true — degradando para "
+                    "validacao local do JWT."
+                )
+                return self.validate_token_local(token)
+            logger.warning(
+                "AUTH_PRODUCT_GATE_FAIL_OPEN=true mas SECRET_KEY ausente — "
+                "impossivel validar; negando."
+            )
             return None
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Validacao de acesso indisponivel. Tente novamente.",
+        )
 
     def validate_token(self, token: str) -> Optional[AuthenticatedUser]:
         """
@@ -269,12 +340,20 @@ class AdminCenterAuth:
         return user
 
     def _payload_to_user(self, payload: Dict[str, Any]) -> AuthenticatedUser:
-        """Converte payload JWT em AuthenticatedUser."""
+        """Converte payload JWT em AuthenticatedUser.
+
+        Claims `is_super_admin` e `permissions` podem nao existir em tokens
+        emitidos por versoes antigas do AdminCenter — defaults seguros
+        (False / None) nesse caso.
+        """
+        permissions = payload.get("permissions")
         return AuthenticatedUser(
             user_id=payload.get("user_id", ""),
             email=payload.get("sub", ""),
             organization_id=payload.get("organization_id"),
             status="active",
+            is_super_admin=bool(payload.get("is_super_admin", False)),
+            permissions=list(permissions) if isinstance(permissions, list) else None,
             raw_claims=payload,
         )
 
@@ -384,6 +463,8 @@ def require_product_access(product_slug: str = None):
 
         # Verificar acesso ao produto via AdminCenter API
         if slug and auth.config.admincenter_url:
+            denied_status: Optional[int] = None
+            unavailable_reason: Optional[str] = None
             try:
                 session = auth._get_session()
                 response = session.post(
@@ -393,26 +474,62 @@ def require_product_access(product_slug: str = None):
                     timeout=10,
                 )
                 if response.status_code == 200:
-                    data = response.json()
-                    if data.get("success") and "product_access" in data.get("data", {}):
-                        pa = data["data"]["product_access"]
-                        user.product_access = ProductAccess(
-                            product_id=pa.get("product_id"),
-                            product_slug=pa.get("product_slug"),
-                            profile_name=pa.get("profile_name"),
-                            permissions=pa.get("permissions", {}),
-                            is_active=pa.get("is_active", True),
-                        )
-                elif response.status_code == 403:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"Acesso negado ao produto '{slug}'",
-                    )
+                    try:
+                        data = response.json()
+                    except ValueError:
+                        data = {}
+                    if data.get("success"):
+                        if "product_access" in data.get("data", {}):
+                            pa = data["data"]["product_access"]
+                            user.product_access = ProductAccess(
+                                product_id=pa.get("product_id"),
+                                product_slug=pa.get("product_slug"),
+                                profile_name=pa.get("profile_name"),
+                                permissions=pa.get("permissions", {}),
+                                is_active=pa.get("is_active", True),
+                            )
+                    else:
+                        # Envelope legado: HTTP 200 com {success: false,
+                        # status_code: 403} conta como negado.
+                        envelope_status = int(data.get("status_code") or 403)
+                        if envelope_status in (401, 403):
+                            denied_status = envelope_status
+                        else:
+                            unavailable_reason = (
+                                f"envelope success=false status={envelope_status}"
+                            )
+                elif response.status_code in (401, 403):
+                    denied_status = response.status_code
+                else:
+                    # 5xx ou qualquer status inesperado: validacao indisponivel.
+                    unavailable_reason = f"status={response.status_code}"
             except HTTPException:
                 raise
             except Exception as e:
-                logger.warning(f"Erro ao verificar acesso ao produto: {e}")
-                # Em caso de falha na rede, permite acesso (graceful degradation)
+                unavailable_reason = str(e)
+
+            if denied_status is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Acesso negado ao produto '{slug}'",
+                )
+
+            if unavailable_reason is not None:
+                logger.warning(
+                    "Nao foi possivel validar acesso ao produto '%s' no "
+                    "AdminCenter (%s).", slug, unavailable_reason,
+                )
+                if not _gate_fail_open():
+                    # Fail-closed (default): sem confirmacao do AdminCenter,
+                    # NEGA em vez de liberar.
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Validacao de acesso indisponivel. Tente novamente.",
+                    )
+                logger.warning(
+                    "AUTH_PRODUCT_GATE_FAIL_OPEN=true — liberando acesso ao "
+                    "produto '%s' sem confirmacao do AdminCenter.", slug,
+                )
 
         return user
 
@@ -509,3 +626,297 @@ def login_via_admincenter(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AdminCenter indisponivel",
         )
+
+
+# =============================================
+# RBAC HELPERS (porte da v1.6 do Cockpit InfraBalance)
+# =============================================
+#
+# O AdminCenter usa permissoes no formato `recurso:acao` (ex.:
+# `users:manage`, `dashboards:read`). Cada usuario tem uma uniao de
+# permissoes vindas de roles diretas + roles via grupos.
+#
+# Duas fontes possiveis de permissoes (em ordem):
+#   1. Claim `permissions` do JWT — quando o AdminCenter passar a incluir.
+#      Stateless, zero roundtrips (lista flat, sem escopo por produto).
+#   2. Endpoint `POST /auth/me/full` do AdminCenter — fallback quando o JWT
+#      nao carrega permissoes. Retorna bloco estruturado com
+#      `organization_permissions` (valem para qualquer produto) e
+#      `products[].permissions` (escopadas por produto). A lib mantem cache
+#      TTL local para evitar N chamadas por janela curta.
+#
+# Super admins (`user.is_super_admin = True`) bypassam toda checagem.
+
+# Cache de permissoes resolvidas via /auth/me/full. Chave = user_id.
+_permission_cache: Dict[str, Dict[str, Any]] = {}
+# TTL curto: mudanca de role ainda eh percebida em ate 60s.
+_PERMISSION_CACHE_TTL_SECONDS = 60
+
+
+def _fetch_permissions_from_me(token: str) -> Optional[Dict[str, Any]]:
+    """Resolve permissoes via `POST /auth/me/full` do AdminCenter.
+
+    Resposta esperada (envelope padrao):
+        {success, data: {user_id, email, is_super_admin,
+                         organization_permissions: [...],
+                         products: [{product_id, product_slug, product_name,
+                                     permissions: [...]}],
+                         accessible_products}}
+
+    Retorna dict estruturado:
+        {
+          'is_super_admin': bool,
+          'organization_permissions': [str, ...],
+          'products': {product_slug: [str, ...]},
+          'merged': [str, ...],  # uniao deduplicada org + todos os produtos
+        }
+
+    Em caso de falha (rede, status != 200, envelope success=false),
+    retorna None (caller decide o que fazer).
+    """
+    auth = _get_auth()
+    base_url = auth.config.admincenter_url
+    if not base_url:
+        logger.warning("ADMIN_CENTER_URL nao configurada; /auth/me/full indisponivel")
+        return None
+
+    try:
+        session = auth._get_session()
+        response = session.post(
+            f"{base_url}/auth/me/full",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if response.status_code != 200:
+            logger.warning(
+                f"/auth/me/full retornou {response.status_code}: {response.text[:200]}"
+            )
+            return None
+
+        body = response.json()
+        if not isinstance(body, dict) or body.get("success") is False:
+            logger.warning("/auth/me/full: envelope com success=false")
+            return None
+        data = body.get("data")
+        if not isinstance(data, dict):
+            return None
+
+        org_perms = [p for p in (data.get("organization_permissions") or []) if p]
+        products: Dict[str, List[str]] = {}
+        for prod in data.get("products") or []:
+            slug = prod.get("product_slug")
+            if slug:
+                products[slug] = [p for p in (prod.get("permissions") or []) if p]
+
+        # Uniao deduplicada preservando ordem.
+        seen, merged = set(), []
+        all_product_perms = [p for perms in products.values() for p in perms]
+        for p in [*org_perms, *all_product_perms]:
+            if p not in seen:
+                seen.add(p)
+                merged.append(p)
+
+        return {
+            "is_super_admin": bool(data.get("is_super_admin", False)),
+            "organization_permissions": org_perms,
+            "products": products,
+            "merged": merged,
+        }
+    except requests.RequestException as e:
+        logger.warning(f"Erro de rede ao buscar /auth/me/full: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Erro inesperado ao parsear /auth/me/full: {e}")
+        return None
+
+
+def _cached_permissions(user_id: str, token: str) -> Optional[Dict[str, Any]]:
+    """Retorna bloco de permissoes do cache local ou faz roundtrip e popula."""
+    if not user_id:
+        return None
+    entry = _permission_cache.get(user_id)
+    if entry and (time.time() - entry["timestamp"]) < _PERMISSION_CACHE_TTL_SECONDS:
+        return entry["detail"]
+
+    detail = _fetch_permissions_from_me(token)
+    if detail is not None:
+        _permission_cache[user_id] = {
+            "detail": detail,
+            "timestamp": time.time(),
+        }
+    return detail
+
+
+def invalidate_permission_cache(user_id: Optional[str] = None) -> None:
+    """Invalida cache de permissoes. Sem argumento, limpa tudo."""
+    if user_id:
+        _permission_cache.pop(user_id, None)
+    else:
+        _permission_cache.clear()
+
+
+def has_permission(
+    user: AuthenticatedUser,
+    permission: str,
+    product_slug: Optional[str] = None,
+) -> bool:
+    """Verifica se o usuario possui uma permissao especifica.
+
+    Sincrono e sem efeito colateral de rede. Pre-condicao: as permissoes
+    do user devem ter sido resolvidas previamente (via claim do JWT ou
+    via `enrich_user_with_permissions` / `require_permission` dependency).
+
+    Regras:
+    - `is_super_admin=True` libera tudo.
+    - Permissao em `organization_permissions` vale para QUALQUER produto.
+    - Com `product_slug`, permissoes de produto sao procuradas apenas no
+      bloco daquele produto; sem `product_slug`, qualquer produto vale.
+    - Quando so ha a lista flat (claim do JWT, sem `permission_detail`),
+      o `product_slug` nao tem como ser aplicado e a checagem cai na flat.
+    - `user.permissions is None` (nao resolvido) retorna False.
+
+    Args:
+        user: usuario autenticado (de `get_current_user` ou similar).
+        permission: string `recurso:acao` (ex.: `'dashboards:read'`).
+        product_slug: escopo de produto opcional.
+
+    Returns:
+        True se o user tem a permissao OU eh super admin; False caso
+        contrario.
+    """
+    if user is None:
+        return False
+    if user.is_super_admin:
+        return True
+
+    detail = user.permission_detail
+    if detail is not None:
+        if permission in (detail.get("organization_permissions") or []):
+            return True
+        products = detail.get("products") or {}
+        if product_slug is not None:
+            return permission in (products.get(product_slug) or [])
+        return any(permission in perms for perms in products.values())
+
+    if user.permissions is None:
+        return False
+    return permission in user.permissions
+
+
+def has_any_permission(
+    user: AuthenticatedUser,
+    permissions: List[str],
+    product_slug: Optional[str] = None,
+) -> bool:
+    """Variante OR: retorna True se o user tiver pelo menos uma das permissoes."""
+    if user is None:
+        return False
+    if user.is_super_admin:
+        return True
+    if not permissions:
+        return False
+    return any(has_permission(user, p, product_slug) for p in permissions)
+
+
+def enrich_user_with_permissions(
+    user: AuthenticatedUser,
+    token: str,
+) -> AuthenticatedUser:
+    """Garante que `user.permissions` esta populado.
+
+    1. Se o JWT ja trouxe `permissions` na claim, nao faz nada.
+    2. Se eh super admin, nao precisa de lista (has_permission faz bypass).
+    3. Caso contrario, busca em `POST /auth/me/full` (cache TTL 60s) e
+       popula in-place: `permissions` (uniao flat), `permission_detail`
+       (bloco estruturado p/ escopo por produto) e promove
+       `is_super_admin` se o AdminCenter afirmar. Em caso de falha de
+       rede, deixa como esta (None) — caller decide fail-open/closed.
+    """
+    if user.permissions is not None:
+        return user
+    if user.is_super_admin:
+        return user
+    detail = _cached_permissions(user.user_id, token)
+    if detail is not None:
+        user.permissions = detail["merged"]
+        user.permission_detail = {
+            "organization_permissions": detail["organization_permissions"],
+            "products": detail["products"],
+        }
+        if detail["is_super_admin"]:
+            user.is_super_admin = True
+    return user
+
+
+def _require_permissions_dependency(permissions: List[str], product_slug: Optional[str]):
+    """Base comum de require_permission / require_any_permission.
+
+    Fail-closed: se as permissoes nao puderem ser resolvidas (AdminCenter
+    indisponivel), NEGA com 503 — a menos que AUTH_PRODUCT_GATE_FAIL_OPEN=true.
+    """
+    async def _dependency(
+        credentials: HTTPAuthorizationCredentials = Depends(security),
+    ) -> AuthenticatedUser:
+        auth = _get_auth()
+        token = credentials.credentials
+
+        user = auth.validate_token(token)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token invalido ou expirado",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        enrich_user_with_permissions(user, token)
+
+        if not user.is_super_admin and user.permissions is None:
+            # Nao foi possivel resolver permissoes (AdminCenter indisponivel).
+            logger.warning(
+                "Permissoes de '%s' nao resolvidas (AdminCenter indisponivel).",
+                user.email,
+            )
+            if not _gate_fail_open():
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Validacao de acesso indisponivel. Tente novamente.",
+                )
+            logger.warning(
+                "AUTH_PRODUCT_GATE_FAIL_OPEN=true — liberando sem checar "
+                "permissoes de '%s'.", user.email,
+            )
+            return user
+
+        if not has_any_permission(user, permissions, product_slug):
+            if len(permissions) == 1:
+                detail_msg = f"Permissao '{permissions[0]}' necessaria"
+            else:
+                detail_msg = f"Uma das permissoes necessaria: {', '.join(permissions)}"
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=detail_msg,
+            )
+        return user
+
+    return _dependency
+
+
+def require_permission(permission: str, product_slug: Optional[str] = None):
+    """FastAPI Dependency Factory - exige uma permissao especifica.
+
+    Faz enriquecimento via `/auth/me/full` se necessario, depois aplica
+    `has_permission`. Levanta 403 quando o user nao tem; 503 quando as
+    permissoes nao podem ser resolvidas (fail-closed, ver
+    AUTH_PRODUCT_GATE_FAIL_OPEN).
+
+    Uso:
+        @app.post("/dashboards")
+        async def criar(user = Depends(require_permission("dashboards:manage"))):
+            ...
+    """
+    return _require_permissions_dependency([permission], product_slug)
+
+
+def require_any_permission(permissions: List[str], product_slug: Optional[str] = None):
+    """Variante OR: passa se o user tiver pelo menos uma das permissoes."""
+    return _require_permissions_dependency(list(permissions), product_slug)
