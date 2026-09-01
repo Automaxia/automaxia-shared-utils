@@ -21,9 +21,58 @@ import os
 import logging
 import requests
 import threading
-from typing import Dict, Any, List, Optional, Union, Tuple
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Dict, Any, Iterator, List, Optional, Union, Tuple
 from datetime import datetime, timedelta
 import tiktoken
+
+# ============================================
+# AGENTE DA REQUISICAO (dimensao de custo)
+# ============================================
+
+# Uma unica pergunta no chat dispara varias chamadas de LLM (embedding, roteador
+# de tabelas, geracao de SQL, analise), todas do MESMO agente. Passar o slug em
+# cada call site seria ruidoso e deixaria as etapas internas orfas — entao o
+# produto marca o agente UMA vez na entrada da requisicao e todo tracking
+# seguinte no mesmo contexto herda a marca.
+#
+# ContextVar (nao variavel global) para nao vazar entre requisicoes concorrentes
+# do mesmo processo: cada task asyncio tem seu proprio valor, e
+# `asyncio.to_thread` copia o contexto — vale tambem para as chamadas
+# bloqueantes do pipeline.
+_agente_da_requisicao: ContextVar[Optional[str]] = ContextVar(
+    'automaxia_agente_da_requisicao', default=None
+)
+
+
+def definir_agente(agent_slug: Optional[str]) -> None:
+    """Marca qual agente responde pela requisicao atual.
+
+    Chame na entrada do endpoint, depois de resolver o agente (RBAC por perfil,
+    orquestrador, config). Todo tracking seguinte no mesmo contexto atribui o
+    consumo a esse slug.
+    """
+    _agente_da_requisicao.set((agent_slug or '').strip() or None)
+
+
+def agente_atual() -> Optional[str]:
+    """Slug do agente marcado para a requisicao atual (ou None)."""
+    return _agente_da_requisicao.get()
+
+
+@contextmanager
+def agente_em_uso(agent_slug: Optional[str]) -> Iterator[None]:
+    """Marca o agente apenas dentro do bloco, restaurando o anterior na saida.
+
+    Para quando um fluxo delega no meio do caminho (ex.: orquestrador -> agente
+    especialista) e o custo de cada trecho deve ir para o seu dono.
+    """
+    token = _agente_da_requisicao.set((agent_slug or '').strip() or None)
+    try:
+        yield
+    finally:
+        _agente_da_requisicao.reset(token)
 
 # ============================================
 # IMPORTS OPCIONAIS
@@ -383,6 +432,19 @@ def extract_tokens_from_response(response: Any) -> Optional[Dict[str, int]]:
             usage = response['usage']
         elif hasattr(response, 'llm_output') and isinstance(response.llm_output, dict):
             usage = response.llm_output.get('token_usage')
+
+        # LangChain AIMessage: quem usa `llm.invoke()` (ChatOpenAI e afins)
+        # recebe um AIMessage, nao o response cru da API — sem estes dois
+        # caminhos o tracking caia na ESTIMATIVA (tiktoken) mesmo tendo o
+        # numero exato em maos, e o custo gravado divergia da fatura.
+        # `response_metadata.token_usage` vem no formato OpenAI (com details);
+        # `usage_metadata` e o padrao da LangChain (input_tokens/output_tokens).
+        if usage is None:
+            meta = getattr(response, 'response_metadata', None)
+            if isinstance(meta, dict):
+                usage = meta.get('token_usage') or meta.get('usage')
+        if usage is None:
+            usage = getattr(response, 'usage_metadata', None)
 
         return _normalize_usage(usage)
     except Exception as e:
@@ -818,7 +880,8 @@ def track_api_response(
     user_id: Optional[str] = None,
     prompt_text: Union[str, List[Dict[str, Any]]] = "",
     prompt_id: Optional[str] = None,
-    force_provider: Optional[str] = None
+    force_provider: Optional[str] = None,
+    agent_slug: Optional[str] = None
 ) -> Dict[str, Any]:
     """Funcao universal para tracking de tokens + custos.
 
@@ -896,6 +959,16 @@ def track_api_response(
     if prompt_id:
         enhanced_metadata["prompt_id"] = prompt_id
 
+    # Duas dimensoes de custo (colunas da migration 0036 do AdminCenter):
+    #  - AREA de negocio: dona da requisicao inteira. Vem do ContextVar que o
+    #    produto marcou na entrada do endpoint (`definir_agente`).
+    #  - ETAPA executora: quem fez ESTA chamada (roteador, seletor de colunas,
+    #    validador...). Vem do `agent_slug` explicito do call site.
+    # Sem etapa explicita, a etapa e' a propria area — nao se perde atribuicao.
+    # O service traduz os slugs em `agents.id` (cacheado) antes de enviar.
+    area = agente_atual()
+    etapa = (agent_slug or '').strip() or area
+
     track_success = counter.admin_center.track_token_usage(
         model_name=model,
         prompt_tokens=prompt_tokens,
@@ -903,6 +976,8 @@ def track_api_response(
         endpoint_called=endpoint,
         user_id=user_id,
         prompt_id=prompt_id,
+        agent_slug=etapa,
+        area_agent_slug=area,
         metadata=enhanced_metadata,
     )
 
@@ -1029,6 +1104,11 @@ if LANGCHAIN_AVAILABLE:
                     prompt_tokens=tokens["prompt_tokens"],
                     completion_tokens=tokens["completion_tokens"],
                     endpoint_called=self.endpoint,
+                    # Mesma heranca do `track_api_response`: sem isto as
+                    # chamadas feitas via LangChain ficariam fora do ranking
+                    # por agente. O callback nao conhece a etapa, so a area.
+                    agent_slug=_agente_da_requisicao.get(),
+                    area_agent_slug=_agente_da_requisicao.get(),
                     metadata={
                         "langchain_callback": True,
                         "cache_read_tokens": tokens.get("cache_read_tokens", 0),

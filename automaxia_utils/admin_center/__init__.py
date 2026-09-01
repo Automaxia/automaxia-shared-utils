@@ -1,6 +1,7 @@
 from .service import (
     AdminCenterService,
     AdminCenterConfig,
+    AdminCenterEndpoints,
     get_admin_center_service,
     reset_admin_center_service,
     AdminCenterContext,
@@ -12,6 +13,7 @@ from .connections import ResolvedConnection, ConnectionResolver
 __all__ = [
     "AdminCenterService",
     "AdminCenterConfig",
+    "AdminCenterEndpoints",
     "get_admin_center_service",
     "reset_admin_center_service",
     "AdminCenterContext",

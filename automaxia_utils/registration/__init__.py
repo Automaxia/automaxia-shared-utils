@@ -1,6 +1,6 @@
 """Auto-registro de produtos satelites no AdminCenter.
 
-Cada produto (dashboard, datachatai, ...) usa este modulo no boot para:
+Cada produto (dashboard, talk, ...) usa este modulo no boot para:
 
 1. Enviar seu manifesto (`code`, `version`, `base_url`, `permissions[]`,
    `menus[]`) para o AdminCenter via `POST /product/register`.

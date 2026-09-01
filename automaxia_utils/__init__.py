@@ -2,13 +2,14 @@
 Automaxia Utils - Pacote compartilhado
 """
 
-__version__ = "1.12.0"
+__version__ = "1.15.0"
 __author__ = "Automaxia"
 
 # Importar de admin_center
 from .admin_center import (
     AdminCenterService,
     AdminCenterConfig,
+    AdminCenterEndpoints,
     get_admin_center_service,
     reset_admin_center_service,
     AdminCenterContext,
@@ -30,7 +31,13 @@ from .token_tracking import (
     extract_tokens_from_response,
     HybridTokenCounter,
     LangChainTokenCallback,
-    invalidate_model_price_cache
+    invalidate_model_price_cache,
+    # Contexto de agente do token tracking. Existia so dentro de
+    # token_tracking; sem reexportar aqui, `from automaxia_utils import
+    # definir_agente` quebra — e e assim que o Balance importa.
+    definir_agente,
+    agente_atual,
+    agente_em_uso,
 )
 
 # Importar de registration (auto-registro de produtos no AdminCenter)
@@ -77,6 +84,7 @@ __all__ = [
     # Admin Center
     "AdminCenterService",
     "AdminCenterConfig",
+    "AdminCenterEndpoints",
     "get_admin_center_service",
     "reset_admin_center_service",
     "AdminCenterContext",
@@ -97,6 +105,9 @@ __all__ = [
     "HybridTokenCounter",
     "LangChainTokenCallback",
     "invalidate_model_price_cache",
+    "definir_agente",
+    "agente_atual",
+    "agente_em_uso",
 
     # Registration (auto-registro de produtos)
     "ProductManifest",

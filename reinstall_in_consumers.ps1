@@ -13,7 +13,7 @@
 #
 # Quando rodar:
 #   - Apos qualquer mudanca no codigo deste repositorio que precise se
-#     propagar aos produtos consumidores (admincenter/datachatai/agente_db/etc).
+#     propagar aos produtos consumidores (admincenter/talk/agente_db/etc).
 #   - Para deploy em outras maquinas, use o caminho Git padrao (vide README).
 
 param(

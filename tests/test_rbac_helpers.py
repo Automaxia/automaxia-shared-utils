@@ -56,7 +56,7 @@ class TestHasPermission:
         )
         assert has_permission(user, "users:manage") is True
         assert has_permission(user, "users:manage", product_slug="dashboard") is True
-        assert has_permission(user, "users:manage", product_slug="datachatai") is True
+        assert has_permission(user, "users:manage", product_slug="talk") is True
 
     def test_product_permission_escopada_por_slug(self):
         user = _user(
@@ -67,7 +67,7 @@ class TestHasPermission:
             },
         )
         assert has_permission(user, "dashboards:read", product_slug="dashboard") is True
-        assert has_permission(user, "dashboards:read", product_slug="datachatai") is False
+        assert has_permission(user, "dashboards:read", product_slug="talk") is False
         # Sem product_slug, qualquer produto vale
         assert has_permission(user, "dashboards:read") is True
 

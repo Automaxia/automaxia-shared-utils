@@ -61,23 +61,52 @@ logger = logging.getLogger(__name__)
 # ============================================================
 @dataclass
 class ResolvedConnection:
-    """Snapshot decriptado de uma conexao de banco.
+    """Snapshot decriptado de uma conexao do cofre do AdminCenter.
 
-    Identico ao `models.ResolvedConnection` do admincenter-api. Mantem
+    Espelha `models.ResolvedConnection` do admincenter-api. Mantem
     `expires_at` para cache TTL e `version` para invalidacao via /resolve.
+
+    Suporta tres familias de engine — por isso host/port/database_name sao
+    OPCIONAIS:
+      - SQL (`postgresql`/`mysql`/`mssql`/`oracle`): host, port,
+        database_name, username, password.
+      - `databricks`: host (workspace) + `databricks_http_path`, password
+        (= PAT); `username` vem vazio.
+      - `rest`/`arcgis`: `base_url` + `auth_type`, password (= token);
+        `username` vazio e host/port/database_name AUSENTES no payload.
+
+    ⚠️ Ate a 1.13.0 os tres eram obrigatorios e lidos com `data["host"]` —
+    resolver uma conexao rest/arcgis levantava KeyError dentro do `from_dict`,
+    que o `_fetch` reportava como "payload invalido" e devolvia None. O
+    produto via "conexao nao encontrada ou sem permissao" para uma conexao que
+    existia e estava liberada.
     """
     id: str
     alias: str
     engine: str
-    host: str
-    port: int
-    database_name: str
     schema_name: str
     username: str
     password: str
     use_tunnel: bool
     version: int
     expires_at: datetime
+    # Campos SQL/databricks — ausentes em rest/arcgis.
+    host: Optional[str] = None
+    port: Optional[int] = None
+    database_name: Optional[str] = None
+    # Engines HTTP (rest/arcgis/databricks)
+    base_url: Optional[str] = None
+    auth_type: Optional[str] = None
+    databricks_http_path: Optional[str] = None
+    arcgis_config: Optional[Dict[str, Any]] = None
+    # Semantica que a conexao expoe ao produto consumidor. Quando preenchidas,
+    # o produto deve usar estes nomes em vez de defaults hardcoded. Os
+    # satelites leem via `getattr(resolved, campo, None)`: campo ausente NAO
+    # da erro, cai no default e o produto degrada em silencio — por isso todo
+    # campo que o /resolve devolve precisa existir aqui.
+    ai_context: Optional[str] = None
+    events_table: Optional[str] = None
+    operational_table: Optional[str] = None
     tunnel_type: Optional[str] = None
     tunnel_config: Optional[Dict[str, Any]] = None
     access_level: str = "read"
@@ -96,16 +125,28 @@ class ResolvedConnection:
         else:
             expires_at = datetime.now(timezone.utc)
 
+        port_raw = data.get("port")
+        port = int(port_raw) if port_raw is not None else None
+
         return cls(
             id=str(data["id"]),
             alias=data["alias"],
             engine=data["engine"],
-            host=data["host"],
-            port=int(data["port"]),
-            database_name=data["database_name"],
+            host=data.get("host"),
+            port=port,
+            database_name=data.get("database_name"),
+            # Fallback `public` vale para o banco do CLIENTE quando o cofre nao
+            # traz `schema_name`. Nao confundir com o schema da plataforma.
             schema_name=data.get("schema_name") or "public",
-            username=data["username"],
+            username=data.get("username") or "",
             password=data["password"],
+            base_url=data.get("base_url"),
+            auth_type=data.get("auth_type"),
+            databricks_http_path=data.get("databricks_http_path"),
+            arcgis_config=data.get("arcgis_config"),
+            ai_context=data.get("ai_context"),
+            events_table=data.get("events_table"),
+            operational_table=data.get("operational_table"),
             use_tunnel=bool(data.get("use_tunnel", False)),
             tunnel_type=data.get("tunnel_type"),
             tunnel_config=data.get("tunnel_config"),
@@ -121,7 +162,21 @@ class ResolvedConnection:
         return datetime.now(timezone.utc) >= self.expires_at
 
     def dsn(self) -> str:
-        """SQLAlchemy DSN. Usa driver psycopg2 para postgres."""
+        """SQLAlchemy DSN para engines SQL. Usa driver psycopg2 para postgres.
+
+        Levanta ValueError para engines que nao tem DSN (rest/arcgis/
+        databricks) — melhor um erro nomeado aqui do que um DSN com
+        `None:None` chegando ao driver.
+        """
+        if self.engine in ("rest", "arcgis", "databricks"):
+            raise ValueError(
+                f"engine='{self.engine}' nao tem DSN SQL. "
+                "Use base_url / databricks_http_path."
+            )
+        if self.host is None or self.port is None or self.database_name is None:
+            raise ValueError(
+                f"engine='{self.engine}' exige host, port e database_name preenchidos"
+            )
         if self.engine == "postgresql":
             scheme = "postgresql+psycopg2"
         elif self.engine == "mysql":
@@ -340,16 +395,28 @@ class ConnectionResolver:
             "/database-connection/resolve",
             params=params,
         )
-        if not response or "data" not in response:
+        # `"data" not in response` NAO basta: o AdminCenter responde a negativa
+        # de acesso com o envelope completo e `data: None`. O guard antigo
+        # deixava passar, `from_dict(None)` fazia `None.get(...)` e levantava
+        # AttributeError — que o except abaixo nao capturava. O erro subia cru
+        # ate o produto, onde virava "sem permissao" sem que ninguem tivesse
+        # olhado o motivo real. Checar o VALOR resolve a raiz.
+        dados = response.get("data") if isinstance(response, dict) else None
+        if not dados:
             logger.warning(
-                "Falha ao resolver conexao (alias=%s, id=%s): resposta vazia",
-                alias, connection_id,
+                "Falha ao resolver conexao (alias=%s, id=%s): %s",
+                alias,
+                connection_id,
+                # A mensagem do servidor e o unico lugar que diz POR QUE —
+                # tipicamente "Acesso negado a esta conexao" (falta de
+                # database_access para o principal desta api-key).
+                (response or {}).get("message") or "resposta sem dados",
             )
             return None
 
         try:
-            return ResolvedConnection.from_dict(response["data"])
-        except (KeyError, ValueError, TypeError) as e:
+            return ResolvedConnection.from_dict(dados)
+        except (AttributeError, KeyError, ValueError, TypeError) as e:
             logger.error("Payload de /resolve invalido: %s", e)
             return None
 

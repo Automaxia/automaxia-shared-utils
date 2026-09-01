@@ -21,10 +21,17 @@ e fornecer infraestrutura compartilhada:
   webhooks do painel ("Rodar agora", pause, resume) e reporta progresso/finish.
 - **Token tracking multi-provider**: contagem hierárquica (response.usage →
   LiteLLM → tiktoken → fallback) e cálculo de custos com cotação USD/BRL.
-- **Auth middleware**: `AdminCenterAuth` para FastAPI (JWT local ou remote)
-  + `get_current_user` + `require_product_access`.
+- **Auth + RBAC**: `AdminCenterAuth` para FastAPI (JWT local ou remote),
+  `get_authenticated_user`, `require_product_access` e — desde a 1.11 — os
+  helpers de permissão (`require_permission`, `has_permission`,
+  `enrich_user_with_permissions`) resolvidos por `POST /auth/me/full`
+  com cache de 60s e comportamento **fail-closed**.
+- **Auto-registro de produtos** (1.10+): `ProductManifest`,
+  `register_with_platform`, `start_heartbeat_loop` — é assim que um satélite
+  entra no catálogo do AdminCenter.
+- **Migrations**: `run_migrations` (alembic com retry) para o lifespan.
 
-Versão atual: **1.9.0**.
+Versão atual: **1.14.0** — histórico em [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -59,7 +66,7 @@ pip install "automaxia-utils[dev]"          # pytest, black, flake8, mypy, twine
 ```
 automaxia-shared-utils/
 ├── README.md                       # ~500 linhas com quickstart + exemplos
-├── setup.py                        # versão 1.9.0
+├── setup.py                        # versão 1.14.0
 ├── requirements.txt
 ├── automaxia_utils/
 │   ├── __init__.py                 # API pública re-exportada
@@ -71,6 +78,12 @@ automaxia-shared-utils/
 │   ├── auth/
 │   │   ├── __init__.py
 │   │   └── middleware.py           # AdminCenterAuth, get_current_user, …
+│   ├── registration/
+│   │   ├── __init__.py
+│   │   └── client.py               # ProductManifest, register_with_platform, heartbeat
+│   ├── migrations/
+│   │   ├── __init__.py
+│   │   └── runner.py               # run_migrations (alembic com retry)
 │   ├── token_tracking/
 │   │   ├── __init__.py
 │   │   └── counter.py              # HybridTokenCounter, LangChainTokenCallback, …
@@ -206,8 +219,10 @@ dessas deps — daí o extra opcional `[database]`.
 
 ### 5.7 JobRunner
 
-- Polling: `GET /agent/job?product_id=…&environment_id=…` a cada 30s.
-- HTTP listener: `POST /control` em `0.0.0.0:8001` (validação HMAC-SHA256).
+- **WebSocket `/api/agent/job/ws` é o canal principal**; o HTTP listener
+  (`POST /control` em `0.0.0.0:8001`, HMAC-SHA256) é o caminho de webhook.
+- **Polling é opt-in desde a 1.7.0** (`start(with_polling=True)`) — use só
+  quando o agente não puder expor ingresso (NAT/firewall).
 - APScheduler local: roda crons mesmo se AdminCenter cair (resiliência).
 - Lifecycle de run: `POST /agent/job/{id}/run` → executa handler →
   `POST /agent/job/run/{run_id}/finish`.
@@ -245,8 +260,8 @@ admin.track_token_usage(agent_slug='sql-analyst',
 > O `model_name` só chega no effective-prompt depois que o **admincenter-api**
 > estiver com o código novo (campos de modelo no `get_effective_prompt`) e o
 > agente tiver `model_id` configurado. Antes disso vem `None` → o produto cai no
-> modelo do `.env` (fallback). Consumidores já com wiring: `datachatai`
-> (automático) e o dashboard/insight do cockpit (opt-in via `DASHBOARD_AGENT_SLUG`).
+> modelo do `.env` (fallback). Consumidores já com wiring: `talk`
+> (automático) e o Vision (opt-in via `DASHBOARD_AGENT_SLUG`).
 
 ---
 
@@ -259,7 +274,12 @@ from automaxia_utils import (
     get_admin_center_service, reset_admin_center_service,
     AdminCenterContext, track_execution,
     # JobRunner
-    JobRunner,
+    JobRunner, JobCancelled,
+    # Auto-registro de produtos (1.10+)
+    ProductManifest, ProductRegistrationConfig,
+    register_with_platform, send_heartbeat, start_heartbeat_loop,
+    # Migrations (opcional — requer alembic)
+    run_migrations,
     # Database connections (broker centralizado)
     ResolvedConnection, ConnectionResolver,
     # Token tracking
@@ -273,6 +293,10 @@ from automaxia_utils import (
     AdminCenterAuth, AdminCenterAuthConfig,
     get_authenticated_user, require_product_access,
     login_via_admincenter,
+    # RBAC (1.11+)
+    require_permission, require_any_permission,
+    has_permission, has_any_permission,
+    enrich_user_with_permissions, invalidate_permission_cache,
 )
 ```
 
@@ -305,7 +329,7 @@ import …`) é considerado privado e pode quebrar entre versões.
 1. **Antes de mudar API pública**: bumpa versão (semver) em `setup.py` e
    atualiza CHANGELOG no README.
 2. **Mudou contrato com AdminCenter**: alinhe com `admincenter-api`
-   (`docs/spec.md`) — endpoints `/agent/job/*`, `/auth/gerar-token/api-key`,
+   (`docs/SPEC.md`) — endpoints `/agent/job/*`, `/auth/gerar-token/api-key`,
    `/secret`, `/prompt`, `/database-connection/resolve`.
 3. **Adicionou novo provider**: estenda `track_api_response` em
    `token_tracking/counter.py` e cubra os campos extras na `extract_tokens_from_response`.
@@ -315,12 +339,23 @@ import …`) é considerado privado e pode quebrar entre versões.
    `v<major>.<minor>.<patch>`, atualize a referência sha no
    `requirements.txt` dos produtos (ou troque para tag oficial quando
    estabilizar).
-6. **Sempre atualize `docs/spec.md` e `docs/tasks.md`** ao introduzir
+6. **Sempre atualize `docs/SPEC.md` e `docs/TASKS.md`** ao introduzir
    funcionalidade ou cobrir tarefa em aberto.
 
 ---
 
 ## 9. Pontos de atenção (gotchas)
+
+- **Imports opcionais**: `auth` depende de FastAPI e `migrations` de alembic —
+  os dois entram por `try/except ImportError` no `__init__.py`. Sintoma de erro
+  real dentro do módulo: `ImportError: cannot import name 'require_permission'`.
+  Importe `automaxia_utils.auth.middleware` direto para ver a exceção verdadeira.
+- **Gate de produto e permissão são FAIL-CLOSED** (1.10+): não conseguir decidir
+  → 503. `AUTH_PRODUCT_GATE_FAIL_OPEN=true` só para destravar incidente.
+- **`None` no manifest = "não declarado"**: `to_payload()` remove chaves nulas
+  para não zerar no catálogo o que o produto não declarou. Um `TypeError` na
+  construção do manifest engolido por `except Exception` deixa
+  `PRODUCT_MANIFEST=None` e o produto **nunca se registra, em silêncio**.
 
 - **JWT expira em 1h**: o método `_ensure_token()` deve ser chamado antes
   de qualquer request autenticada — não cacheie o header `Authorization`
@@ -388,8 +423,10 @@ pytest -q
 
 ## 11. Onde encontrar mais
 
-- Especificação técnica: [docs/spec.md](docs/spec.md)
-- Backlog: [docs/tasks.md](docs/tasks.md)
+- Especificação técnica: [docs/SPEC.md](docs/SPEC.md)
+- **Desenho interno: [docs/SDD.md](docs/SDD.md)**
+- Backlog: [docs/TASKS.md](docs/TASKS.md)
+- Transversal do ecossistema: [../../docs/SDD.md](../../docs/SDD.md)
 - README de uso: [README.md](README.md)
 - AdminCenter (servidor): `../admincenter-api`
 - Painel: `../admincenter-web`

@@ -161,7 +161,7 @@ from automaxia_utils import get_admin_center_service
 admin = get_admin_center_service()
 
 # Buscar prompt por slug
-prompt = admin.get_prompt("datachat-sql-agent")
+prompt = admin.get_prompt("talk-sql-agent")
 print(prompt["content"])       # conteudo do prompt
 print(prompt["temperature"])   # 0.2
 print(prompt["max_tokens"])    # 2000
@@ -188,7 +188,7 @@ admin = get_admin_center_service()
 client = OpenAI()
 
 # 1. Buscar prompt centralizado
-prompt_data = admin.get_prompt("datachat-sql-agent")
+prompt_data = admin.get_prompt("talk-sql-agent")
 
 # 2. Substituir variaveis
 content = prompt_data["content"]
@@ -294,7 +294,7 @@ admin.log_execution("/api/users", "GET", 200, response_time_ms=45)
 # Log de uso de prompt (com parametros opcionais)
 admin.log_prompt_usage(
     prompt_id="uuid-do-prompt",
-    variables_used={"empresa": "CASAN", "area": "saneamento"},
+    variables_used={"empresa": "Acme", "area": "comercial"},
     final_prompt="Voce e um assistente de CASAN...",
     tokens_used=1500,
     model_used="gpt-4o",
@@ -500,7 +500,7 @@ if prompt is None:
 ## Changelog
 
 ### v1.11.0 (2026-08-13)
-- **Helpers RBAC** (porte da v1.6 do Cockpit InfraBalance, adaptado ao
+- **Helpers RBAC** (porte da plataforma de origem, adaptado ao
   AdminCenter): `has_permission(user, perm, product_slug=None)`,
   `has_any_permission`, `enrich_user_with_permissions`,
   `require_permission(perm)` / `require_any_permission(perms)` (dependencies
@@ -521,7 +521,7 @@ if prompt is None:
 ### v1.10.0 (2026-08-12)
 - **Novo modulo `automaxia_utils.registration`**: auto-registro de produtos no
   AdminCenter (`POST /product/register`) + loop de heartbeat em thread daemon
-  (`POST /product/{code}/heartbeat`), portado do Cockpit InfraBalance.
+  (`POST /product/{code}/heartbeat`), portado da plataforma de origem.
   Exports: `ProductManifest`, `ProductRegistrationConfig`,
   `register_with_platform`, `send_heartbeat`, `start_heartbeat_loop`.
   Manifesto inclui `mode` ('test'|'live'), `organization_slug` (obrigatorio na

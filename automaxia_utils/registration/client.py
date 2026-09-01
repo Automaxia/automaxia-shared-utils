@@ -69,7 +69,7 @@ class ProductManifest:
     # Engines de banco que o produto sabe consumir (ex.: ['postgresql','mysql']).
     # Filtra o seletor de conexao mostrado ao usuario. Mesma convencao dos
     # demais: None = "nao declarado", o AdminCenter mantem o que ja esta la.
-    # Adicionado em 17/08/2026 (1.12.0): os manifests do dashai e do turing ja
+    # Adicionado em 17/08/2026 (1.12.0): os manifests do vision e do turing ja
     # declaravam este campo — o dataclass nao aceitava, e o `except Exception`
     # do manifest do turing engolia o TypeError e deixava PRODUCT_MANIFEST=None,
     # ou seja, o produto simplesmente nunca se registrava, em silencio.

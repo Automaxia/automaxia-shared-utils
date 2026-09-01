@@ -7,9 +7,15 @@ import time
 import pytest
 from datetime import datetime, timedelta, timezone
 
+# ⚠️ Semear `os.environ` no nivel do MODULO vale para as chaves abaixo, que
+# nenhum outro modulo de teste toca. NAO vale para o slug de produto: o
+# `test_sync_balance_1_14.py` escreve `ADMIN_CENTER_PRODUCT_SLUG` em
+# `os.environ`, e como `from_env` da precedencia a ele, o valor semeado aqui
+# perdia — dependendo apenas da ORDEM em que o pytest importa os modulos.
+# Um teste que muda de resultado conforme o vizinho e' pior que teste ausente.
+# Por isso os testes de slug usam `monkeypatch`, que isola e restaura.
 os.environ["SECRET_KEY"] = "test-secret-key-minimum-32-chars-for-jwt-security"
 os.environ["ADMIN_CENTER_URL"] = "http://fake-admin-center:8000/api"
-os.environ["PRODUCT_SLUG"] = "dashboard"
 os.environ["AUTH_LOCAL_VALIDATION"] = "true"
 
 from automaxia_utils.auth.middleware import (
@@ -31,9 +37,26 @@ class TestAuthConfig:
         config = AdminCenterAuthConfig.from_env()
         assert config.admincenter_url != ""  # carregou alguma URL do env
 
-    def test_from_env_carrega_product_slug(self):
-        config = AdminCenterAuthConfig.from_env()
-        assert config.product_slug == "dashboard"
+    def test_from_env_prefere_admin_center_product_slug(self, monkeypatch):
+        """`ADMIN_CENTER_PRODUCT_SLUG` vence `PRODUCT_SLUG`.
+
+        E o que os satelites do Studio definem; lendo so' `PRODUCT_SLUG`, o
+        gate de produto era pulado em silencio.
+        """
+        monkeypatch.setenv("ADMIN_CENTER_PRODUCT_SLUG", "talk")
+        monkeypatch.setenv("PRODUCT_SLUG", "vision")
+        assert AdminCenterAuthConfig.from_env().product_slug == "talk"
+
+    def test_from_env_cai_em_product_slug_quando_o_novo_falta(self, monkeypatch):
+        """Retrocompatibilidade: quem so define o nome antigo continua valendo."""
+        monkeypatch.delenv("ADMIN_CENTER_PRODUCT_SLUG", raising=False)
+        monkeypatch.setenv("PRODUCT_SLUG", "vision")
+        assert AdminCenterAuthConfig.from_env().product_slug == "vision"
+
+    def test_from_env_sem_nenhum_dos_dois_devolve_vazio(self, monkeypatch):
+        monkeypatch.delenv("ADMIN_CENTER_PRODUCT_SLUG", raising=False)
+        monkeypatch.delenv("PRODUCT_SLUG", raising=False)
+        assert AdminCenterAuthConfig.from_env().product_slug == ""
 
     def test_from_env_local_validation_true(self):
         config = AdminCenterAuthConfig.from_env()
@@ -52,10 +75,10 @@ class TestAuthenticatedUser:
     def test_cria_usuario_basico(self):
         user = AuthenticatedUser(
             user_id="usr-123",
-            email="test@linedata.com.br",
+            email="test@automaxia.com.br",
         )
         assert user.user_id == "usr-123"
-        assert user.email == "test@linedata.com.br"
+        assert user.email == "test@automaxia.com.br"
         assert user.status == "active"
 
     def test_cria_usuario_completo(self):
@@ -87,12 +110,12 @@ class TestProductAccess:
     def test_cria_product_access(self):
         pa = ProductAccess(
             product_id="prod-1",
-            product_slug="datachatai",
+            product_slug="talk",
             profile_name="operator",
             permissions={"query": True},
             is_active=True,
         )
-        assert pa.product_slug == "datachatai"
+        assert pa.product_slug == "talk"
         assert pa.is_active is True
 
     def test_defaults(self):
@@ -125,7 +148,7 @@ class TestAdminCenterAuthLocal:
 
     def test_valida_token_local_valido(self, auth):
         payload = {
-            "sub": "admin@linedata.com.br",
+            "sub": "admin@automaxia.com.br",
             "user_id": "usr-123",
             "organization_id": "org-456",
             "exp": datetime.now(timezone.utc) + timedelta(hours=1),
@@ -134,7 +157,7 @@ class TestAdminCenterAuthLocal:
         token = self._create_token(payload)
         user = auth.validate_token_local(token)
         assert user is not None
-        assert user.email == "admin@linedata.com.br"
+        assert user.email == "admin@automaxia.com.br"
 
     def test_rejeita_token_expirado(self, auth):
         payload = {

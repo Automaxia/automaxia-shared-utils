@@ -1,5 +1,8 @@
 from .counter import (
     track_api_response,
+    definir_agente,
+    agente_atual,
+    agente_em_uso,
     track_openai_call,
     estimate_tokens_and_cost,
     count_tokens_tiktoken,
@@ -13,6 +16,9 @@ from .counter import (
 
 __all__ = [
     "track_api_response",
+    "definir_agente",
+    "agente_atual",
+    "agente_em_uso",
     "track_openai_call",
     "estimate_tokens_and_cost",
     "count_tokens_tiktoken",

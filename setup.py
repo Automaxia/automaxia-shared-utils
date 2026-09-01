@@ -14,7 +14,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="automaxia-utils",
-    version="1.12.0",
+    version="1.15.0",
     author="Automaxia",
     author_email="dev@automaxia.com",
     description="Utilitários compartilhados para rastreamento de tokens e integração com Admin Center",
@@ -51,6 +51,19 @@ setup(
             "sqlalchemy>=2.0.0",
             "sshtunnel>=0.4.0"
         ],
+        # `auth/middleware.py` (get_authenticated_user, RequirePermission) e o
+        # unico modulo que importa FastAPI. Fica em EXTRA, nao em
+        # install_requires, porque ha consumidor que usa so o
+        # AdminCenterService/ConnectionResolver e nao roda FastAPI — obriga-lo
+        # a instalar o framework inteiro seria peso morto.
+        "fastapi": [
+            "fastapi>=0.100.0",
+            # `middleware.py` tenta `from jose import jwt` e cai para PyJWT —
+            # suporte duplo deliberado, mas o CI nao tinha NENHUM dos dois e 3
+            # testes de validacao local de token falhavam. Declaramos o jose,
+            # que e o mesmo que o admincenter-api usa.
+            "python-jose[cryptography]>=3.3.0"
+        ],
         "all": [
             "langchain>=0.1.0",
             "langchain-community>=0.0.13",
@@ -58,7 +71,12 @@ setup(
             "google-generativeai>=0.5.0",
             "psycopg2-binary>=2.9.0",
             "sqlalchemy>=2.0.0",
-            "sshtunnel>=0.4.0"
+            "sshtunnel>=0.4.0",
+            # Sem isto o CI quebrava na COLETA de test_auth_middleware.py e
+            # test_rbac_helpers.py com "No module named 'fastapi'" — o
+            # workflow instala `.[all]` e o extra nao trazia o framework.
+            "fastapi>=0.100.0",
+            "python-jose[cryptography]>=3.3.0"
         ],
         "dev": [
             "pytest>=7.0.0",

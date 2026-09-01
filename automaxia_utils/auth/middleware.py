@@ -2,7 +2,7 @@
 Auth Middleware Centralizado - Automaxia Shared Utils
 
 Middleware reutilizavel para validar JWT do AdminCenter em qualquer projeto.
-Permite que Dashboard, DataChatAI e outros projetos usem a mesma autenticacao
+Permite que Dashboard, Talk e outros projetos usem a mesma autenticacao
 centralizada do AdminCenter (plataforma-backend).
 
 Dois modos de operacao:
@@ -49,7 +49,7 @@ class AdminCenterAuthConfig:
     secret_key: str = ""
     algorithm: str = "HS256"
 
-    # Slug do produto atual (ex: 'dashboard', 'datachatai')
+    # Slug do produto atual (ex: 'dashboard', 'talk')
     product_slug: str = ""
 
     # Se True, valida JWT localmente. Se False, chama AdminCenter API.
@@ -60,12 +60,40 @@ class AdminCenterAuthConfig:
 
     @classmethod
     def from_env(cls):
-        """Carrega config das variaveis de ambiente."""
+        """Carrega config das variaveis de ambiente.
+
+        `product_slug` aceita `ADMIN_CENTER_PRODUCT_SLUG` (preferido, e o que
+        os satelites do Studio realmente definem no .env) ou `PRODUCT_SLUG`
+        (formato legado). Sem isso o slug ficava vazio e o gate de produto em
+        `require_product_access()` era PULADO em silencio — o `if slug and ...`
+        simplesmente nao entrava, e qualquer JWT valido acessava o produto.
+
+        Em `ENVIRONMENT=development`, prioriza `ADMIN_CENTER_DEV_URL` /
+        `ADMIN_CENTER_URL_LOCAL` — mesma logica de `registration/client.py` e
+        do `AdminCenterConfig`. Sem isso, o `/auth/me/full` que enriquece as
+        permissoes ia para o AdminCenter de PRODUCAO carregando um token do
+        ambiente local (onde aquele user_id nao existe) e todo
+        `require_permission` respondia 403/503 mesmo com a permissao concedida
+        no banco local.
+        """
+        admincenter_url = os.getenv("ADMIN_CENTER_URL", "")
+        if os.getenv("ENVIRONMENT", "production").lower() == "development":
+            dev_url = (
+                os.getenv("ADMIN_CENTER_DEV_URL")
+                or os.getenv("ADMIN_CENTER_URL_LOCAL")
+                or ""
+            ).strip()
+            if dev_url:
+                admincenter_url = dev_url
+
         return cls(
-            admincenter_url=os.getenv("ADMIN_CENTER_URL", ""),
+            admincenter_url=admincenter_url,
             secret_key=os.getenv("SECRET_KEY", os.getenv("JWT_SECRET_KEY", "")),
             algorithm=os.getenv("ALGORITHM", "HS256"),
-            product_slug=os.getenv("PRODUCT_SLUG", ""),
+            product_slug=(
+                os.getenv("ADMIN_CENTER_PRODUCT_SLUG", "")
+                or os.getenv("PRODUCT_SLUG", "")
+            ),
             local_validation=os.getenv("AUTH_LOCAL_VALIDATION", "true").lower() == "true",
             cache_ttl=int(os.getenv("AUTH_CACHE_TTL", "300")),
         )
@@ -191,6 +219,8 @@ class AdminCenterAuth:
                     logger.warning(f"Token invalido (PyJWT): {e}")
                     return None
 
+                if not self._tipo_autoriza_requisicao(payload):
+                    return None
                 return self._payload_to_user(payload)
             except ImportError:
                 logger.error("Nenhuma lib JWT disponivel. Instale python-jose ou PyJWT.")
@@ -202,6 +232,8 @@ class AdminCenterAuth:
                 self.config.secret_key,
                 algorithms=[self.config.algorithm],
             )
+            if not self._tipo_autoriza_requisicao(payload):
+                return None
             return self._payload_to_user(payload)
         except jwt.ExpiredSignatureError:
             logger.info("Token expirado")
@@ -338,6 +370,25 @@ class AdminCenterAuth:
             self._cache_user(cache_key, user)
 
         return user
+
+    @staticmethod
+    def _tipo_autoriza_requisicao(payload: Dict[str, Any]) -> bool:
+        """True se o payload pode autorizar uma requisicao no satelite.
+
+        O AdminCenter assina com a MESMA chave tokens que nao sao access
+        token: `2fa_pending` (emitido apos a senha e antes do segundo fator)
+        e `refresh` (7 dias). Como a validacao local so conferia assinatura e
+        `sub`, ambos eram aceitos aqui como Bearer pleno — o satelite
+        autorizava uma sessao que o AdminCenter ainda nao tinha concluido.
+
+        Ausencia da claim e aceita: tokens de versoes anteriores nao a
+        carregam e recusa-los invalidaria as sessoes vivas no deploy.
+        """
+        tipo = payload.get("type")
+        if tipo is None or tipo == "access":
+            return True
+        logger.warning("Token de tipo '%s' recusado como access token", tipo)
+        return False
 
     def _payload_to_user(self, payload: Dict[str, Any]) -> AuthenticatedUser:
         """Converte payload JWT em AuthenticatedUser.

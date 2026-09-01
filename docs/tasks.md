@@ -1,10 +1,39 @@
-# tasks.md — automaxia-shared-utils
+# TASKS — automaxia-shared-utils
 
-Backlog técnico da lib. Atualize ao concluir/criar itens.
+> Requisitos: [SPEC.md](SPEC.md) · Desenho: [SDD.md](SDD.md)
+> Backlog transversal: [`../../../docs/TASKS.md`](../../../docs/TASKS.md)
+> **Convenção de ID:** itens abertos usam `LIB-##`. Itens concluídos ficam como
+> checklist histórica, sem ID.
+
+Última revisão: **2026-08-18** · lib **1.12.0**.
 
 ---
 
 ## ✅ Done
+
+### 1.10.0 → 1.12.0 (ago/2026 — integração ao Studio)
+- [x] **Módulo `registration`**: `ProductManifest`, `ProductRegistrationConfig`,
+      `register_with_platform`, `send_heartbeat`, `start_heartbeat_loop`.
+- [x] **Gate de produto fail-closed** por default (503 quando não dá para
+      decidir); `AUTH_PRODUCT_GATE_FAIL_OPEN=true` reverte.
+- [x] **Helpers RBAC** (`require_permission`, `require_any_permission`,
+      `has_permission`, `has_any_permission`, `enrich_user_with_permissions`,
+      `invalidate_permission_cache`) via `POST /auth/me/full`, cache TTL 60s.
+- [x] **Dimensões de custo por agente** em `track_token_usage`
+      (`agent_id` = etapa, `area_agent_id` = área de negócio).
+- [x] **Modelo do agente no `get_effective_prompt`** (`model_id`/`model_name`/
+      `is_model_overridden`) + `track_token_usage(agent_slug=…)` resolvendo o
+      mesmo modelo — o registro de custo deixa de divergir do que rodou.
+- [x] **`run_migrations`** (alembic com retry) para o lifespan dos backends.
+- [x] **`requires_connection_engines`** no manifest. Antes disso o campo já era
+      declarado pelos manifests do Vision e do Turing: o `TypeError` era engolido
+      pelo `except Exception` do manifest do Turing, que ficava
+      `PRODUCT_MANIFEST=None` — **o produto nunca se registrava, em silêncio**.
+- [x] **`registration/` passou a ser rastreado no git.** O módulo inteiro estava
+      untracked: quem instalava por `@main` recebia 1.8.0 sem `ProductManifest`.
+- [x] Tag `v1.12.0` publicada em `main`.
+
+### Histórico anterior
 
 ### Núcleo
 - [x] `AdminCenterConfig` com `from_env()` e settings via `.env`.
@@ -109,11 +138,18 @@ Backlog técnico da lib. Atualize ao concluir/criar itens.
 ## 🛠 Todo (próximos passos imediatos)
 
 ### Versionamento & release
-- [ ] Adicionar **CHANGELOG.md** com histórico desde v1.0.0.
-- [ ] **Tags Git formais** (`v1.4.0`, `v1.4.1`, …). Hoje só commit hash no
-      `requirements.txt` dos produtos.
-- [ ] Documentar processo de release (bump em `setup.py`, tag, push, atualizar
-      consumidores).
+- [ ] **LIB-01** — Adicionar **CHANGELOG.md** com histórico desde v1.0.0 (hoje o
+      histórico canônico está no `README.md`, que mistura guia e changelog).
+- [ ] **LIB-02** — Tags Git para as versões intermediárias. Hoje existem só
+      `v1.8.0` e `v1.12.0`; 1.9/1.10/1.11 não têm tag, então não há como pinar.
+- [ ] **LIB-03** — **Pin de versão nos consumidores.** Todos instalam
+      `git+…@main` sem pin; com `cache-from: type=gha` a lib congela na versão
+      do dia em que a camada nasceu. Combinar `no-cache-filters` no estágio de
+      deps + `@v1.12.0` no `requirements.txt`.
+- [ ] **LIB-04** — Documentar processo de release (bump em `setup.py`, tag, push,
+      atualizar consumidores).
+- [ ] **LIB-05** — Trocar o **PAT em texto puro** no remote do repositório por
+      credential helper e revogar a chave.
 - [x] Script `reinstall_in_consumers.ps1` (PowerShell) na raiz do repo:
       varre uma raiz (`D:\Automaxia\clientes` por default), encontra todas as
       venvs com `automaxia_utils` instalado e reinstala `--force-reinstall
@@ -121,59 +157,61 @@ Backlog técnico da lib. Atualize ao concluir/criar itens.
       Útil em dev local pra propagar mudanças sem `pip install` manual por venv.
 
 ### JobRunner
-- [ ] Suíte de testes (HMAC mismatch, polling, force_run_at, lifecycle
+- [ ] **LIB-11** — Suíte de testes (HMAC mismatch, polling, force_run_at, lifecycle
       completo).
-- [ ] **Retry com backoff** ao reportar `progress`/`finish` em caso de 5xx.
-- [ ] **Graceful shutdown** com timeout — esperar handlers em execução
+- [ ] **LIB-12** — **Retry com backoff** ao reportar `progress`/`finish` em caso de 5xx.
+- [ ] **LIB-13** — **Graceful shutdown** com timeout — esperar handlers em execução
       antes de derrubar o servidor.
-- [ ] Validar que `webhook_url` no Job recebido é resolvível (URL absoluta
+- [ ] **LIB-14** — Validar que `webhook_url` no Job recebido é resolvível (URL absoluta
       OU relativa com `base_url` do environment) — útil pra dar feedback
       antes do trigger.
-- [ ] Health check expor versão da lib (`GET /healthz` → `{ok: true,
-      service: "automaxia-utils", version: "1.4.0"}`).
-- [ ] Endpoint local `GET /jobs` (somente loopback) para debug — lista os
+- [ ] **LIB-15** — Health check expor versão da lib (`GET /healthz` → `{ok: true,
+      service: "automaxia-utils", version: automaxia_utils.__version__}`).
+- [ ] **LIB-16** — Endpoint local `GET /jobs` (somente loopback) para debug — lista os
       handlers registrados e a config atual.
 
 ### Resiliência
-- [ ] **Backoff exponencial** no batch worker quando `admincenter-api`
+- [ ] **LIB-17** — **Backoff exponencial** no batch worker quando `admincenter-api`
       retorna 5xx em sequência.
-- [ ] Persistir fila de logs em arquivo local quando AdminCenter ficar fora
+- [ ] **LIB-18** — Persistir fila de logs em arquivo local quando AdminCenter ficar fora
       por X minutos (replay no reconnect).
-- [ ] Métrica interna de `queue_size` exposta para o produto consumidor
+- [ ] **LIB-19** — Métrica interna de `queue_size` exposta para o produto consumidor
       monitorar.
 
 ### Database connections
-- [ ] Suíte de testes (cache TTL, version bump, túnel mock, SQLAlchemy DSN
+- [ ] **LIB-20** — Suíte de testes (cache TTL, version bump, túnel mock, SQLAlchemy DSN
       por engine).
-- [ ] Suporte oficial a **MySQL** (`pymysql`), **SQL Server** (`pyodbc`) e
+- [ ] **LIB-21** — Suporte oficial a **MySQL** (`pymysql`), **SQL Server** (`pyodbc`) e
       **Oracle** (`cx_Oracle`) — hoje só Postgres é validado em runtime.
-- [ ] **Pool de túneis SSH** compartilhado entre processos via socket Unix
+- [ ] **LIB-22** — **Pool de túneis SSH** compartilhado entre processos via socket Unix
       (Linux) — hoje cada processo abre seu forwarder.
-- [ ] Métrica de `cache_hit_ratio` para `/resolve`.
-- [ ] Fallback offline: persistir último `ResolvedConnection` em disco
+- [ ] **LIB-23** — Métrica de `cache_hit_ratio` para `/resolve`.
+- [ ] **LIB-24** — Fallback offline: persistir último `ResolvedConnection` em disco
       criptografado com chave do `MASTER_KEY` local — usado se AdminCenter
       ficar fora durante runtime crítico.
 
 ### Token tracking
-- [ ] Suporte a **streaming responses** (OpenAI `stream=True`) — hoje só
+- [ ] **LIB-25** — Suporte a **streaming responses** (OpenAI `stream=True`) — hoje só
       funciona em respostas completas.
-- [ ] **Pricing por região** (Anthropic Bedrock difere do Anthropic direto).
-- [ ] Detecção de uso de **prompt cache** (Anthropic prompt caching beta).
+- [ ] **LIB-26** — **Pricing por região** (Anthropic Bedrock difere do Anthropic direto).
+- [ ] **LIB-27** — Detecção de uso de **prompt cache** (Anthropic prompt caching beta).
 
 ### Auth middleware
-- [ ] Cache de validação **REMOTE** (TTL curto) para reduzir round-trips.
-- [ ] Suporte a `audience`/`issuer` no JWT — hoje aceita qualquer JWT
+- [ ] **LIB-28** — Cache de validação **REMOTE** (TTL curto) para reduzir round-trips.
+- [ ] **LIB-29** — Suporte a `audience`/`issuer` no JWT — hoje aceita qualquer JWT
       assinado com a `SECRET_KEY` correta.
 
 ### Documentação
-- [ ] Diagrama de sequência: produto → JobRunner → AdminCenter (rodar agora).
-- [ ] Diagrama de threads/processos: main app + batch worker + jobs http +
+- [ ] **LIB-30** — Diagrama de sequência: produto → JobRunner → AdminCenter (rodar agora).
+- [ ] **LIB-31** — Diagrama de threads/processos: main app + batch worker + jobs http +
       jobs poll + APScheduler.
-- [ ] Guia de troubleshooting avançado (debug de batch, timeouts, HMAC).
+- [ ] **LIB-32** — Guia de troubleshooting avançado (debug de batch, timeouts, HMAC).
 
 ---
 
 ## 📋 Backlog (melhorias futuras)
+
+> Wish-list: sem ID. Ganha `LIB-##` quando entra no backlog comprometido acima.
 
 ### Distribuição
 - [ ] Publicar no **PyPI** (hoje só Git+HTTPS).
