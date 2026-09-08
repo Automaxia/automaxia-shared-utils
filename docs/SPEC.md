@@ -6,9 +6,25 @@
 > lado servidor destes contratos vive no
 > [`admincenter-api`](../../admincenter-api/docs/SPEC.md).
 
-**Versão da lib:** **1.15.0** (`setup.py:__version__`).
-**Aderente ao `admincenter-api` até a migration `0044`.**
-Última revisão: **2026-08-31**.
+**Versão da lib:** **1.15.1** (`setup.py:version`).
+**Aderente ao `admincenter-api` até a migration `0044`** — é a `execution_steps`
+que fecha o contrato consumido; as migrations posteriores (0045–0050) são de
+catálogo e não mudam o que a lib fala.
+Última revisão: **2026-09-08**.
+
+> ⚠️ **A versão publicada é a 1.15.0 — a 1.15.1 não saiu daqui.** Conferido em
+> 08/09/2026: o `main` do repo publicado (`automaxia/automaxia-shared-utils`),
+> que é o que todo `requirements.txt` instala por `@main`, está em **1.15.0**;
+> a 1.15.1 existe só no monorepo. Ou seja, **nenhum pod tem a correção do
+> envelope** — e é justamente ela que faz uma recusa de escrita deixar de passar
+> por sucesso. Publicar é o `ST-31`/`OF-03`; as únicas tags lá são `v1.8.0` e
+> `v1.12.0` (`LIB-02`).
+>
+> O `automaxia_utils.__version__` foi alinhado com o `setup.py` em 08/09/2026
+> (estava em `1.15.0` com o `setup.py` em `1.15.1`). Importa porque é esse
+> símbolo que a documentação manda conferir **no pod** para detectar lib
+> congelada (`ST-11`): defasado, ele confirma uma versão que não é a instalada.
+> **Ao subir a versão, mexa nos dois arquivos.**
 
 ---
 
@@ -275,8 +291,8 @@ disparado por heartbeat zerava a flag ajustada na UI.
 - `menus[].requires` é **lista**, não string.
 
 > ⚠️ **1.12.0 — `requires_connection_engines`.** Os manifests do Vision e do
-> Turing já declaravam o campo antes do dataclass aceitá-lo. O `TypeError`
-> resultante era engolido pelo `except Exception` do manifest do Turing, que
+> Harvest já declaravam o campo antes do dataclass aceitá-lo. O `TypeError`
+> resultante era engolido pelo `except Exception` do manifest do Harvest, que
 > ficava com `PRODUCT_MANIFEST = None`: **o produto simplesmente nunca se
 > registrava, em silêncio.** Se um satélite "não aparece no catálogo e não
 > loga erro", suspeite primeiro de construção de manifest.
@@ -371,7 +387,7 @@ o lifespan dos backends.
 # Identidade de bootstrap — o mínimo
 ADMIN_CENTER_ENABLED=true
 ADMIN_CENTER_URL=https://admincenter-api.automaxia.com.br/api
-ADMIN_CENTER_URL_LOCAL=http://127.0.0.1:8002/api     # dev
+ADMIN_CENTER_URL_LOCAL=http://127.0.0.1:8020/api     # dev
 ADMIN_CENTER_API_KEY=sk_live_…
 ADMIN_CENTER_PRODUCT_SLUG=meu-produto
 
@@ -410,13 +426,12 @@ AUTH_PRODUCT_GATE_FAIL_OPEN=false  # só para destravar incidente
 | v1.10.0 | **Módulo `registration`** (manifest + heartbeat); gate de produto **fail-closed** |
 | v1.11.0 | **Helpers RBAC** via `/auth/me/full` (cache 60s, fail-closed); `agent_id`/`area_agent_id` no token tracking |
 | v1.12.0 | Consolidação no Studio: `registration` **rastreado no git** (antes o módulo inteiro estava untracked — quem instalava por `@main` recebia 1.8.0 sem `ProductManifest`), `requires_connection_engines` no manifest, `run_migrations`, modelo do agente no effective-prompt e `track_token_usage(agent_slug=…)`. Tag `v1.12.0`. |
-
 | v1.13.0 | `fastapi` e `python-jose` declarados como extras (CI da lib passa) |
 | v1.14.0 *(2026-08-26)* | Sincronização com a `infrabalance-shared-utils` 2.9.0: gate de produto voltou a funcionar (`ADMIN_CENTER_PRODUCT_SLUG`), auth em dev deixa de bater em produção, `ResolvedConnection` cobre `rest`/`arcgis`/`databricks` e os campos da migration 0042, `log_min_level`, desmembramento do `context` do log, guardas de `has_logging_identity()`, descoberta de `product_id`/`environment_id` por slug, `log_process(execution_id=…)`. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
+| v1.15.0 *(2026-08-31)* | **Execução observável**: `agent_step`/`execution_scope`/`log_step` gravam a linha do tempo de dentro de uma execução (`execution_steps`, migration 0044), com o modelo EFETIVO por etapa; `log_process` ganha `agent_slug`/`area_agent_slug`/`connection_id` (migration 0043) resolvendo pelo mesmo cache do token tracking; passos vão num POST só. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
+| **v1.15.1** *(atual, 2026-09-04)* | **Recusa de escrita viajava dentro de um `201`**: as rotas `POST /logs/*` declaram `status_code=201` no decorator e devolvem a rejeição no envelope (`success:false`), então o batch worker contabilizava "1/1 enviados" para uma linha que nunca existiu. Passou a inspecionar o envelope (`_envelope_aceito`) e a logar a recusa em **WARNING** — antes até falha de rede saía em `debug`. Foi o que escondeu um produto gravando **zero** `application_logs` por dias. |
 
 Distribuição: `pip install git+https://github.com/Automaxia/automaxia-shared-utils.git`.
-| **v1.15.0** *(atual, 2026-08-31)* | **Execução observável**: `agent_step`/`execution_scope`/`log_step` gravam a linha do tempo de dentro de uma execução (`execution_steps`, migration 0044), com o modelo EFETIVO por etapa; `log_process` ganha `agent_slug`/`area_agent_slug`/`connection_id` (migration 0043) resolvendo pelo mesmo cache do token tracking; passos vão num POST só. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
-
 Sem PyPI. A partir da 1.14.0 o histórico canônico é o
 [`CHANGELOG.md`](../CHANGELOG.md); esta tabela fica como índice das versões.
 

@@ -1,11 +1,20 @@
 # SDD — automaxia-shared-utils
 
-> Desenho interno da lib `automaxia_utils` **1.12.0**.
-> Requisitos: [SPEC.md](SPEC.md) · Backlog: [TASKS.md](TASKS.md)
+> Desenho interno da lib `automaxia_utils` **1.15.1**.
+> Requisitos: [SPEC.md](SPEC.md) · Backlog: [TASKS.md](TASKS.md) ·
+> Histórico: [`../CHANGELOG.md`](../CHANGELOG.md)
 > Contratos transversais: [`../../../docs/SDD.md`](../../../docs/SDD.md) — **não
 > repetidos aqui** (JWT, cofre, auto-registro, silo `mode`).
 
-Última revisão: **2026-08-18**.
+Última revisão: **2026-09-08**.
+
+> O desenho descrito aqui é o mesmo desde a 1.12.0; o que entrou depois foram
+> capacidades novas sobre ele — a **linha do tempo de execução**
+> (`agent_step`/`log_step`/`execution_scope`, 1.15.0, contrato em
+> [`../../../docs/SDD.md`](../../../docs/SDD.md) §5.6) e, na **1.15.1**, o batch
+> worker passando a inspecionar o **envelope** da resposta: o `admincenter-api`
+> devolve recusa de escrita dentro de um HTTP `201`, e a lib contabilizava como
+> enviada uma linha que nunca existiu. Detalhe em [`../CHANGELOG.md`](../CHANGELOG.md).
 
 ---
 

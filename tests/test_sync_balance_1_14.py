@@ -319,8 +319,8 @@ class TestProductSlugNaConfig:
     def test_from_env_aceita_slug_raiz(self):
         os.environ["ADMIN_CENTER_URL"] = "http://x"
         os.environ["ADMIN_CENTER_API_KEY"] = "k"
-        os.environ["PRODUCT_SLUG"] = "turing"
-        assert AdminCenterConfig.from_env().product_slug == "turing"
+        os.environ["PRODUCT_SLUG"] = "harvest"
+        assert AdminCenterConfig.from_env().product_slug == "harvest"
 
     def test_get_variable_sem_environment_id_nao_chama_none(self, monkeypatch):
         """Antes montava /environment/None/variables e devolvia 404."""

@@ -1,7 +1,7 @@
 """Helper para aplicar migrations alembic no startup do FastAPI.
 
 Uso tipico em qualquer backend do Studio (admincenter-api, vision-api,
-talk-api, turing-backend):
+talk-api, harvest-backend):
 
     from contextlib import asynccontextmanager
     from fastapi import FastAPI

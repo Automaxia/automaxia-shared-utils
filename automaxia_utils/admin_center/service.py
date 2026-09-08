@@ -1483,7 +1483,7 @@ class AdminCenterService:
                    stream: bool = True):
         """Marca uma etapa do trabalho de um agente.
 
-            with admin.agent_step('turing-mapeador-sql',
+            with admin.agent_step('harvest-mapeador-sql',
                                   label='mapeando o array de entrada') as passo:
                 passo.progress(40, 'validando colunas contra o schema')
                 resultado = mapear()
@@ -1495,7 +1495,7 @@ class AdminCenterService:
           `_resolve_agent_info` (cacheado, com cache de negativa) que o token
           tracking usa. Por isso o passo grava o modelo que DE FATO rodou —
           `product_agents.model_id` vence `agents.model_id` e muda sem deploy.
-          O Turing ja' pagou por essa licao gravando `OPENAI_MODEL` no artefato.
+          O Harvest ja' pagou por essa licao gravando `OPENAI_MODEL` no artefato.
         - **`run_id`** herdado do run context quando dentro de um job;
           `correlation_id` do `execution_scope` quando fora.
         - **`duration_ms`** e o `status` final: `failed` quando a excecao sobe
@@ -1888,6 +1888,22 @@ class AdminCenterService:
                 self.logger.error(f"Erro no batch worker: {e}")
                 time.sleep(0.5)  # Pausa menor para recuperação rápida
     
+    @staticmethod
+    def _envelope_aceito(resposta) -> bool:
+        """True se o AdminCenter de fato GRAVOU o que foi enviado.
+
+        A API responde num envelope `{success, data, message, status_code}` e
+        ha' rotas de escrita que recusam o registro (produto de outro tenant,
+        lote acima do teto) devolvendo `success: false` DENTRO de um 201 —
+        `_make_request` so' olha o codigo HTTP e devolve o corpo, entao a
+        recusa chegava aqui indistinguivel de um insert. Sem esta checagem o
+        batch worker contabiliza "1/1 enviados" para uma linha que nunca
+        existiu, e o produto fica sem nenhum sinal de que perdeu telemetria.
+        """
+        if not isinstance(resposta, dict):
+            return bool(resposta)
+        return resposta.get("success") is not False
+
     def _process_batch(self, batch: List[tuple]):
         """Processa um batch de requisições enviando individualmente"""
         success_count = 0
@@ -1907,11 +1923,14 @@ class AdminCenterService:
         passos = [p for tipo, p in batch if tipo == "execution_step"]
         if passos:
             try:
-                if self._make_request("POST", AdminCenterEndpoints.LOG_STEP, passos):
+                resp = self._make_request("POST", AdminCenterEndpoints.LOG_STEP, passos)
+                if self._envelope_aceito(resp):
                     success_count += len(passos)
                 else:
-                    self.logger.debug(
-                        "Falha ao enviar %d passos de execucao - continuando", len(passos)
+                    self.logger.warning(
+                        "AdminCenter RECUSOU %d passos de execucao: %s",
+                        len(passos),
+                        (resp or {}).get("message") if isinstance(resp, dict) else "sem resposta",
                     )
             except Exception as e:
                 self.logger.debug(f"Erro ao enviar lote de passos: {e}")
@@ -1934,10 +1953,17 @@ class AdminCenterService:
 
                 if endpoint:
                     response = self._make_request("POST", endpoint, payload)
-                    if response:
+                    if self._envelope_aceito(response):
                         success_count += 1
                     else:
-                        self.logger.debug(f"Falha ao enviar {endpoint_type} - continuando processamento")
+                        # WARNING, nao debug: aqui a linha e' PERDIDA. Com debug,
+                        # a perda so' aparecia para quem ja' desconfiava dela.
+                        self.logger.warning(
+                            "AdminCenter RECUSOU %s: %s",
+                            endpoint_type,
+                            response.get("message") if isinstance(response, dict)
+                            else "sem resposta (rede/HTTP)",
+                        )
 
             except Exception as e:
                 self.logger.debug(f"Erro ao processar item do batch {endpoint_type}: {e}")

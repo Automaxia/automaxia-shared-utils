@@ -14,7 +14,7 @@ Guia ponta-a-ponta para plugar um produto novo na tela de **Jobs Agendados** do 
                                 │ HTTP (JWT do painel)
                                 ▼
    ┌────────────────────────────────────────────────────┐
-   │              admincenter-api  :8002                │
+   │              admincenter-api  :8020                │
    │  • CRUD de product_jobs                            │
    │  • POST /job/{id}/trigger ("Rodar agora")          │
    │  • GET  /job/{id}/connection-status (testa agente) │
@@ -56,7 +56,7 @@ python -c "from automaxia_utils import JobRunner; print('OK', JobRunner)"
 # Identificação do produto/ambiente no AdminCenter
 ADMIN_CENTER_ENABLED=true
 ADMIN_CENTER_URL=https://admincenter-api.automaxia.com.br/api
-ADMIN_CENTER_URL_LOCAL=http://127.0.0.1:8002/api      # usado quando ENVIRONMENT=development
+ADMIN_CENTER_URL_LOCAL=http://127.0.0.1:8020/api      # usado quando ENVIRONMENT=development
 ADMIN_CENTER_API_KEY=sk_test_...                       # sk_test_* ou sk_live_*
 ADMIN_CENTER_ORGANIZATION_ID=<uuid>
 ADMIN_CENTER_PRODUCT_ID=<uuid>
@@ -70,7 +70,7 @@ ADMIN_CENTER_JOBS_WEBHOOK_SECRET=<random-32-bytes>     # mesmo valor de products
 ENVIRONMENT=development                                 # ou production
 ```
 
-> ⚠ A porta do webhook **não pode colidir** com a do AdminCenter local (8002). Use 8003+.
+> ⚠ A porta do webhook **não pode colidir** com a do AdminCenter local (8020). Use 8003+.
 
 > ⚠ Em `ENVIRONMENT=development`, a lib troca automaticamente: `ADMIN_CENTER_URL` → `ADMIN_CENTER_URL_LOCAL` e `ADMIN_CENTER_ENVIRONMENT_ID` → `ADMIN_CENTER_ENVIRONMENT_ID_DEV` (se existir).
 
@@ -154,7 +154,7 @@ Clicar no ícone abre um toastr com o detalhe (latência, status code, motivo).
 TOKEN=<jwt-do-painel>
 JOB_ID=<uuid-do-job>
 curl -H "Authorization: Bearer $TOKEN" \
-     http://127.0.0.1:8002/api/job/$JOB_ID/connection-status
+     http://127.0.0.1:8020/api/job/$JOB_ID/connection-status
 ```
 
 Resposta esperada quando tudo OK:
@@ -174,7 +174,7 @@ Resposta esperada quando tudo OK:
 
 ```bash
 curl -X POST -H "Authorization: Bearer $TOKEN" \
-     http://127.0.0.1:8002/api/job/$JOB_ID/trigger
+     http://127.0.0.1:8020/api/job/$JOB_ID/trigger
 ```
 
 Resposta com `delivery.webhook_ok: true` significa que o produto recebeu e aceitou o comando.
@@ -197,8 +197,8 @@ Verifique nesta ordem:
    - ❌ `http://127.0.0.1:8003/folha-pagamento` → 404
    - ✅ `http://127.0.0.1:8003/control`
 
-3. **Porta do produto é diferente da do AdminCenter (8002)?**
-   - Nunca usar 8002 em `ADMIN_CENTER_JOBS_WEBHOOK_PORT`.
+3. **Porta do produto é diferente da do AdminCenter (8020)?**
+   - Nunca usar 8020 em `ADMIN_CENTER_JOBS_WEBHOOK_PORT`.
 
 4. **A lib instalada tem `JobRunner`?**
    ```bash
@@ -249,7 +249,7 @@ Antes de subir um produto novo:
 
 - [ ] `automaxia_utils` ≥ 1.4.0 instalado
 - [ ] `.env` com todas as 7 variáveis `ADMIN_CENTER_*` preenchidas
-- [ ] Porta `ADMIN_CENTER_JOBS_WEBHOOK_PORT` livre e diferente de 8002
+- [ ] Porta `ADMIN_CENTER_JOBS_WEBHOOK_PORT` livre e diferente de 8020
 - [ ] `runner.register("<slug>", handler)` antes do `runner.start()`
 - [ ] No AdminCenter: job criado com mesmo slug, `webhook_url=...:<porta>/control`, `is_enabled=true`, `environment_id` setado
 - [ ] Botão "Testar conexão" verde na tela de Jobs

@@ -8,6 +8,27 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.15.1] — 2026-09-04
+
+### Corrigido
+
+- **Recusa de escrita deixava de contar como perda.** O `admincenter-api`
+  responde num envelope `{success, data, message}` e as rotas POST de log
+  declaram `status_code=201` no decorator — uma rejeição (`success: false`,
+  "Produto nao encontrado.") chegava como **HTTP 201**. `_make_request` só olha
+  o código HTTP, então o `_process_batch` contabilizava "1/1 enviados" para uma
+  linha que nunca existiu, e o produto não tinha como saber. O batch worker
+  agora inspeciona o envelope (`_envelope_aceito`) e loga a recusa em
+  **WARNING** — antes até a falha de rede saía em `debug`, invisível para quem
+  não estava justamente procurando por ela.
+
+  Foi o que escondeu, por dias, a folha de pagamento (produto `ischolar`)
+  gravando **zero** `application_logs`: a api-key pertencia a uma organização
+  diferente da do produto e o guard de tenant do `admincenter-api` recusava
+  cada POST — em silêncio, dos dois lados.
+
+---
+
 ## [1.15.0] — 2026-08-31
 
 Execução observável: dá para saber **o que** um agente fez, não só quanto ele
@@ -21,7 +42,7 @@ opcionais.
   `admincenter.execution_steps` (migration 0044 do `admincenter-api`):
 
   ```python
-  with admin.agent_step('turing-mapeador-sql',
+  with admin.agent_step('harvest-mapeador-sql',
                         label='mapeando o array de entrada') as passo:
       passo.progress(40, 'validando colunas contra o schema')
       resultado = mapear()

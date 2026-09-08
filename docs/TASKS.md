@@ -5,7 +5,14 @@
 > **Convenção de ID:** itens abertos usam `LIB-##`. Itens concluídos ficam como
 > checklist histórica, sem ID.
 
-Última revisão: **2026-08-18** · lib **1.12.0**.
+Última revisão: **2026-09-08** · lib **1.15.1**.
+
+> O backlog abaixo foi escrito na 1.12.0 e continua válido — o que entrou depois
+> (1.13.0 → 1.15.1) está no [`../CHANGELOG.md`](../CHANGELOG.md), que é o
+> histórico canônico desde a 1.14.0. Dois itens ganharam urgência com a 1.15.x:
+> o **`LIB-02`** (a tag `v1.15.0` ainda não foi publicada — é o `ST-31`/`OF-03`,
+> e sem ela nenhum deploy que instale por `git+…@main` alcança a versão nova) e
+> o **`LIB-03`** (pin + `no-cache-filters`).
 
 ---
 
@@ -26,8 +33,8 @@
       mesmo modelo — o registro de custo deixa de divergir do que rodou.
 - [x] **`run_migrations`** (alembic com retry) para o lifespan dos backends.
 - [x] **`requires_connection_engines`** no manifest. Antes disso o campo já era
-      declarado pelos manifests do Vision e do Turing: o `TypeError` era engolido
-      pelo `except Exception` do manifest do Turing, que ficava
+      declarado pelos manifests do Vision e do Harvest: o `TypeError` era engolido
+      pelo `except Exception` do manifest do Harvest, que ficava
       `PRODUCT_MANIFEST=None` — **o produto nunca se registrava, em silêncio**.
 - [x] **`registration/` passou a ser rastreado no git.** O módulo inteiro estava
       untracked: quem instalava por `@main` recebia 1.8.0 sem `ProductManifest`.
@@ -138,16 +145,26 @@
 ## 🛠 Todo (próximos passos imediatos)
 
 ### Versionamento & release
-- [ ] **LIB-01** — Adicionar **CHANGELOG.md** com histórico desde v1.0.0 (hoje o
-      histórico canônico está no `README.md`, que mistura guia e changelog).
-- [ ] **LIB-02** — Tags Git para as versões intermediárias. Hoje existem só
-      `v1.8.0` e `v1.12.0`; 1.9/1.10/1.11 não têm tag, então não há como pinar.
+- [x] **LIB-01** — **`CHANGELOG.md` existe** e é o histórico canônico desde a
+      1.14.0 (a tabela da [SPEC §12](SPEC.md) ficou como índice das versões).
+      Fechado ao conferir em 08/09/2026.
+- [ ] **LIB-06** — **Publicar a 1.15.1.** Conferido em 08/09/2026: o `main` do
+      repo publicado está em **1.15.0**, e é ele que os consumidores instalam por
+      `@main` — a correção do envelope (recusa de escrita chegando como `201`)
+      não alcançou pod nenhum. É a metade viva do `ST-31`/`OF-03`, e é
+      pré-requisito do `LIB-03`: não se pina o que não foi publicado.
+- [ ] **LIB-02** — Tags Git para as versões intermediárias. Confirmado no remoto
+      em 08/09/2026: existem **só** `v1.8.0` e `v1.12.0` — 1.9/1.10/1.11 e toda a
+      linha 1.13–1.15 não têm tag, então não há como pinar.
 - [ ] **LIB-03** — **Pin de versão nos consumidores.** Todos instalam
-      `git+…@main` sem pin; com `cache-from: type=gha` a lib congela na versão
-      do dia em que a camada nasceu. Combinar `no-cache-filters` no estágio de
-      deps + `@v1.12.0` no `requirements.txt`.
-- [ ] **LIB-04** — Documentar processo de release (bump em `setup.py`, tag, push,
-      atualizar consumidores).
+      `git+…@main` sem pin (conferido em 08/09/2026 nos `requirements.txt` de
+      `harvest-api`, `office-api` e irmãos); com `cache-from: type=gha` a lib
+      congela na versão do dia em que a camada nasceu. Combinar `no-cache-filters`
+      no estágio de deps + uma tag da linha 1.15 no `requirements.txt` — o que
+      depende do `LIB-06` e do `LIB-02`.
+- [ ] **LIB-04** — Documentar processo de release (bump em `setup.py`
+      **e em `automaxia_utils/__init__.py`** — os dois divergiram até 08/09/2026 —,
+      tag, push, atualizar consumidores).
 - [ ] **LIB-05** — Trocar o **PAT em texto puro** no remote do repositório por
       credential helper e revogar a chave.
 - [x] Script `reinstall_in_consumers.ps1` (PowerShell) na raiz do repo:
