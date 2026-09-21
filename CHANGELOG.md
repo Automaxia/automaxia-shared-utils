@@ -8,6 +8,58 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.17.0] — 2026-09-17
+
+Responsável técnico: Wesley Romualdo da Silva
+
+### Adicionado
+
+- **Allowlist de tabelas por conexão** (`automaxia_utils.sql_allowlist`). A
+  conexão do cofre passa a carregar `allowed_tables` (AdminCenter, migration
+  0053), entregue no `ResolvedConnection.allowed_tables` que já existia.
+  - `verificar_sql(sql, allowlist, dialeto, schema_padrao, catalogo_padrao)`
+    levanta `TabelaNaoLiberada` se o SQL ler objeto fora da lista — JOIN,
+    subconsulta, CTE e UNION incluídos. Sem allowlist não faz nada; SQL que não
+    dá para ler é **recusado** (fail-closed).
+  - `filtrar_tabelas(...)` / `liberada(...)` para a listagem de schema.
+  - Itens `schema.objeto`, `schema.*` ou `objeto` (schema padrão); BigQuery
+    `dataset.tabela` (projeto de fora nunca casa). Catálogo do Postgres
+    (`information_schema`, `pg_catalog` e `pg_*` sem schema) é permitido.
+- Dependência nova no core: `sqlglot` (puro Python).
+
+Portado do ecossistema-irmão Balance (`infrabalance-utils` 2.11.1), já com a
+correção do `pg_*` sem schema — a 2.11.0 de lá fazia o satélite recusar a
+própria leitura do schema.
+
+## [1.16.0] — 2026-09-15
+
+### Adicionado
+
+- **Engine `bigquery` no cofre.** O `ResolvedConnection` passa a entender a
+  família BigQuery — `database_name` é o projeto, `schema_name` é o dataset,
+  `password` é o JSON da service account e `username` é o `client_email`.
+  `dsn()` devolve `bigquery://projeto/dataset` **sem credencial na URL**: a
+  chave vai pelo `credentials_info` do dialeto, em `get_engine()`.
+
+- **`get_bigquery_client(alias, maximum_bytes_billed=…)`** (e o equivalente no
+  `AdminCenterService`), com `build_bigquery_client` exposto para quem já
+  resolve a conexão por conta própria. O BigQuery **cobra por byte lido e o
+  `LIMIT` não reduz a varredura**, então toda consulta leva um teto: o
+  parâmetro ou a env `BIGQUERY_MAXIMUM_BYTES_BILLED`. Acima dele a consulta
+  falha em vez de gerar a conta.
+
+- Extra `[bigquery]` (`google-cloud-bigquery`, `sqlalchemy-bigquery`). Sem ele,
+  `get_engine`/`get_bigquery_client` explicam o que instalar em vez de estourar
+  `ImportError` cru.
+
+### Corrigido
+
+- `get_psycopg2()` numa conexão BigQuery recusava com "psycopg2 nao instalado"
+  quando o driver faltava, escondendo o motivo real. A checagem de engine agora
+  vem antes do import e diz o que usar (`get_engine`/`get_bigquery_client`).
+
+---
+
 ## [1.15.1] — 2026-09-04
 
 ### Corrigido

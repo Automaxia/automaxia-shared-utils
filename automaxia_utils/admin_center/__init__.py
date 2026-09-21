@@ -8,7 +8,7 @@ from .service import (
     track_execution
 )
 from .jobs import JobRunner, JobCancelled
-from .connections import ResolvedConnection, ConnectionResolver
+from .connections import ResolvedConnection, ConnectionResolver, build_bigquery_client
 
 __all__ = [
     "AdminCenterService",
@@ -22,4 +22,5 @@ __all__ = [
     "JobCancelled",
     "ResolvedConnection",
     "ConnectionResolver",
+    "build_bigquery_client",
 ]

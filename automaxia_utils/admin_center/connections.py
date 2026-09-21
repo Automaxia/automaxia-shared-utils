@@ -43,7 +43,9 @@ Lazy imports:
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -74,6 +76,8 @@ class ResolvedConnection:
         (= PAT); `username` vem vazio.
       - `rest`/`arcgis`: `base_url` + `auth_type`, password (= token);
         `username` vazio e host/port/database_name AUSENTES no payload.
+      - `bigquery`: `database_name` (= project_id), `schema_name` (= dataset),
+        password (= JSON da service account), `username` (= client_email).
 
     ⚠️ Ate a 1.13.0 os tres eram obrigatorios e lidos com `data["host"]` —
     resolver uma conexao rest/arcgis levantava KeyError dentro do `from_dict`,
@@ -173,6 +177,13 @@ class ResolvedConnection:
                 f"engine='{self.engine}' nao tem DSN SQL. "
                 "Use base_url / databricks_http_path."
             )
+        if self.engine == "bigquery":
+            # Credencial NAO vai na URL: o dialeto recebe `credentials_info`
+            # (ver ConnectionResolver.get_engine).
+            if not self.database_name:
+                raise ValueError("engine='bigquery' exige database_name (project_id)")
+            dataset = self.schema_name if self.schema_name not in ("", "public") else ""
+            return f"bigquery://{self.database_name}/{dataset}".rstrip("/")
         if self.host is None or self.port is None or self.database_name is None:
             raise ValueError(
                 f"engine='{self.engine}' exige host, port e database_name preenchidos"
@@ -188,6 +199,64 @@ class ResolvedConnection:
         user = quote_plus(self.username)
         pwd = quote_plus(self.password)
         return f"{scheme}://{user}:{pwd}@{self.host}:{self.port}/{self.database_name}"
+
+    @property
+    def is_bigquery(self) -> bool:
+        return self.engine == "bigquery"
+
+    def bigquery_credentials_info(self) -> Dict[str, Any]:
+        """JSON da service account decodificado (engine='bigquery')."""
+        if not self.is_bigquery:
+            raise ValueError(f"engine='{self.engine}' nao e' bigquery")
+        try:
+            info = json.loads(self.password)
+        except ValueError as exc:
+            raise ValueError("Credencial bigquery nao e' um JSON de service account") from exc
+        if not isinstance(info, dict) or info.get("type") != "service_account":
+            raise ValueError("Credencial bigquery nao e' um JSON de service account")
+        return info
+
+
+def build_bigquery_client(
+    resolved: ResolvedConnection,
+    maximum_bytes_billed: Optional[int] = None,
+) -> Any:
+    """Cria o client BigQuery a partir de um `ResolvedConnection`.
+
+    Responsável técnico: Wesley Romualdo da Silva
+
+    BigQuery cobra por byte lido (LIMIT nao reduz a varredura): o teto por
+    consulta vem de `maximum_bytes_billed` ou da env
+    `BIGQUERY_MAXIMUM_BYTES_BILLED` — consulta acima dele falha em vez de
+    gerar a conta.
+    """
+    try:
+        from google.cloud import bigquery  # type: ignore
+        from google.oauth2 import service_account  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "google-cloud-bigquery nao instalado. `pip install \"automaxia-utils[bigquery]\"`."
+        ) from exc
+
+    info = resolved.bigquery_credentials_info()
+    credentials = service_account.Credentials.from_service_account_info(info)
+    project = resolved.database_name or info.get("project_id")
+
+    if maximum_bytes_billed is None:
+        env_teto = os.environ.get("BIGQUERY_MAXIMUM_BYTES_BILLED", "").strip()
+        maximum_bytes_billed = int(env_teto) if env_teto.isdigit() else None
+
+    dataset = resolved.schema_name if resolved.schema_name not in ("", "public") else None
+    opcoes: Dict[str, Any] = {}
+    if dataset:
+        opcoes["default_dataset"] = f"{project}.{dataset}"
+    if maximum_bytes_billed:
+        opcoes["maximum_bytes_billed"] = maximum_bytes_billed
+    return bigquery.Client(
+        project=project,
+        credentials=credentials,
+        default_query_job_config=bigquery.QueryJobConfig(**opcoes),
+    )
 
 
 def _parse_iso(value: str) -> datetime:
@@ -287,16 +356,20 @@ class ConnectionResolver:
     def get_psycopg2(self, alias: str, **kwargs: Any) -> Any:
         """Abre `psycopg2.connect(...)`. Ajusta host/porta para o forwarder
         local quando a conexao usa tunel SSH."""
+        resolved = self.resolve(alias=alias)
+        if not resolved:
+            raise RuntimeError(f"Conexao '{alias}' nao encontrada ou sem permissao")
+        if resolved.is_bigquery:
+            raise RuntimeError(
+                f"Conexao '{alias}' e' BigQuery — use get_engine() ou get_bigquery_client()"
+            )
+
         try:
             import psycopg2  # type: ignore
         except ImportError as exc:
             raise RuntimeError(
                 "psycopg2 nao instalado. `pip install psycopg2-binary`."
             ) from exc
-
-        resolved = self.resolve(alias=alias)
-        if not resolved:
-            raise RuntimeError(f"Conexao '{alias}' nao encontrada ou sem permissao")
 
         host, port = self._materialize_host_port(alias, resolved)
 
@@ -330,6 +403,9 @@ class ConnectionResolver:
         if not resolved:
             raise RuntimeError(f"Conexao '{alias}' nao encontrada ou sem permissao")
 
+        if resolved.is_bigquery:
+            return self._create_bigquery_engine(resolved, **engine_kwargs)
+
         host, port = self._materialize_host_port(alias, resolved)
         # Reconstroi DSN com host/porta efetivos (pode ser do forwarder)
         scheme = resolved.dsn().split("://", 1)[0]
@@ -347,6 +423,30 @@ class ConnectionResolver:
             connect_args.setdefault("options", f"-c search_path={resolved.schema_name}")
 
         return create_engine(dsn, **engine_kwargs)
+
+    def get_bigquery_client(
+        self,
+        alias: str,
+        maximum_bytes_billed: Optional[int] = None,
+    ) -> Any:
+        """`google.cloud.bigquery.Client` autenticado pela service account do cofre."""
+        resolved = self.resolve(alias=alias)
+        if not resolved:
+            raise RuntimeError(f"Conexao '{alias}' nao encontrada ou sem permissao")
+        return build_bigquery_client(resolved, maximum_bytes_billed=maximum_bytes_billed)
+
+    @staticmethod
+    def _create_bigquery_engine(resolved: ResolvedConnection, **engine_kwargs: Any) -> Any:
+        """Engine SQLAlchemy via dialeto `sqlalchemy-bigquery` (sem pool TCP)."""
+        try:
+            from sqlalchemy import create_engine  # type: ignore
+            import sqlalchemy_bigquery  # type: ignore  # noqa: F401 — registra o dialeto
+        except ImportError as exc:
+            raise RuntimeError(
+                "Dialeto BigQuery nao instalado. `pip install \"automaxia-utils[bigquery]\"`."
+            ) from exc
+        engine_kwargs.setdefault("credentials_info", resolved.bigquery_credentials_info())
+        return create_engine(resolved.dsn(), **engine_kwargs)
 
     @contextmanager
     def get_session(self, alias: str, **engine_kwargs: Any) -> Iterator[Any]:

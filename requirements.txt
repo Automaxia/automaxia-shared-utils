@@ -3,6 +3,8 @@ requests>=2.32.0
 python-decouple>=3.8
 tiktoken>=0.7.0
 litellm>=1.40.0
+# Allowlist de tabelas por conexao (sql_allowlist) — puro Python
+sqlglot>=26,<28
 
 # JobRunner (scheduler local + servidor HTTP de webhook). Necessario quando
 # o produto usa automaxia_utils.JobRunner. Se o produto nao usar jobs, essas

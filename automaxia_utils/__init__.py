@@ -2,7 +2,7 @@
 Automaxia Utils - Pacote compartilhado
 """
 
-__version__ = "1.15.1"
+__version__ = "1.17.0"
 __author__ = "Automaxia"
 
 # Importar de admin_center
@@ -18,6 +18,7 @@ from .admin_center import (
     JobCancelled,
     ResolvedConnection,
     ConnectionResolver,
+    build_bigquery_client,
 )
 
 # Importar de token_tracking
@@ -93,6 +94,7 @@ __all__ = [
     "JobCancelled",
     "ResolvedConnection",
     "ConnectionResolver",
+    "build_bigquery_client",
 
     # Token Tracking
     "track_api_response",

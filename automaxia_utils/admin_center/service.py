@@ -744,6 +744,16 @@ class AdminCenterService:
         """Cria SQLAlchemy `Engine` para o alias. Descarte com `.dispose()`."""
         return self._get_connection_resolver().get_engine(alias, **engine_kwargs)
 
+    def get_bigquery_client(self, alias: str, maximum_bytes_billed: Optional[int] = None):
+        """`google.cloud.bigquery.Client` de uma conexao engine='bigquery'.
+
+        Teto de custo por consulta: `maximum_bytes_billed` ou env
+        `BIGQUERY_MAXIMUM_BYTES_BILLED`. Requer o extra `[bigquery]`.
+        """
+        return self._get_connection_resolver().get_bigquery_client(
+            alias, maximum_bytes_billed=maximum_bytes_billed
+        )
+
     def get_db_session(self, alias: str, **engine_kwargs):
         """Context manager: abre `Engine` + `Session`, commita no exit ou
         rollback em caso de excecao, depois fecha tudo.

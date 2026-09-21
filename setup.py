@@ -14,7 +14,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="automaxia-utils",
-    version="1.15.1",
+    version="1.17.0",
     author="Automaxia",
     author_email="dev@automaxia.com",
     description="Utilitários compartilhados para rastreamento de tokens e integração com Admin Center",
@@ -50,6 +50,12 @@ setup(
             "psycopg2-binary>=2.9.0",
             "sqlalchemy>=2.0.0",
             "sshtunnel>=0.4.0"
+        ],
+        # Conexoes engine='bigquery' do cofre (get_engine / get_bigquery_client)
+        "bigquery": [
+            "google-cloud-bigquery>=3.25.0",
+            "sqlalchemy-bigquery>=1.11.0",
+            "sqlalchemy>=2.0.0"
         ],
         # `auth/middleware.py` (get_authenticated_user, RequirePermission) e o
         # unico modulo que importa FastAPI. Fica em EXTRA, nao em

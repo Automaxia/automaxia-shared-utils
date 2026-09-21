@@ -8,23 +8,28 @@
 
 **Versão da lib:** **1.15.1** (`setup.py:version`).
 **Aderente ao `admincenter-api` até a migration `0044`** — é a `execution_steps`
-que fecha o contrato consumido; as migrations posteriores (0045–0050) são de
+que fecha o contrato consumido; as migrations posteriores (0045–0051) são de
 catálogo e não mudam o que a lib fala.
 Última revisão: **2026-09-08**.
 
-> ⚠️ **A versão publicada é a 1.15.0 — a 1.15.1 não saiu daqui.** Conferido em
-> 08/09/2026: o `main` do repo publicado (`automaxia/automaxia-shared-utils`),
-> que é o que todo `requirements.txt` instala por `@main`, está em **1.15.0**;
-> a 1.15.1 existe só no monorepo. Ou seja, **nenhum pod tem a correção do
-> envelope** — e é justamente ela que faz uma recusa de escrita deixar de passar
-> por sucesso. Publicar é o `ST-31`/`OF-03`; as únicas tags lá são `v1.8.0` e
-> `v1.12.0` (`LIB-02`).
+> ✅ **A 1.15.1 está PUBLICADA** desde 08/09/2026, com a tag `v1.15.1` — commit
+> `e3c847f` no `main` de `automaxia/automaxia-shared-utils`, que é o que todo
+> `requirements.txt` instala por `@main`. Antes disso a 1.15.1 existia só no
+> monorepo e **nenhum pod tinha a correção do envelope**, que é justamente a que
+> faz uma recusa de escrita deixar de passar por sucesso. Fechou o `LIB-06` e a
+> metade viva do `ST-31`/`OF-03`.
+>
+> ⚠️ Publicar **não** é o mesmo que chegar no pod. Com `cache-from: type=gha` a
+> camada do pip congela na versão do dia em que ela nasceu, e o
+> `requirements.txt` — que é a chave do cache — não muda quando a lib muda
+> (`ST-11`/`LIB-03`). O próximo deploy de cada satélite precisa de
+> `no-cache-filters` no estágio de deps, e a conferência é
+> `automaxia_utils.__version__` **no pod**.
 >
 > O `automaxia_utils.__version__` foi alinhado com o `setup.py` em 08/09/2026
 > (estava em `1.15.0` com o `setup.py` em `1.15.1`). Importa porque é esse
-> símbolo que a documentação manda conferir **no pod** para detectar lib
-> congelada (`ST-11`): defasado, ele confirma uma versão que não é a instalada.
-> **Ao subir a versão, mexa nos dois arquivos.**
+> símbolo que a documentação manda conferir no pod: defasado, ele confirma uma
+> versão que não é a instalada. **Ao subir a versão, mexa nos dois arquivos.**
 
 ---
 

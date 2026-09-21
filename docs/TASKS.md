@@ -9,10 +9,12 @@
 
 > O backlog abaixo foi escrito na 1.12.0 e continua válido — o que entrou depois
 > (1.13.0 → 1.15.1) está no [`../CHANGELOG.md`](../CHANGELOG.md), que é o
-> histórico canônico desde a 1.14.0. Dois itens ganharam urgência com a 1.15.x:
-> o **`LIB-02`** (a tag `v1.15.0` ainda não foi publicada — é o `ST-31`/`OF-03`,
-> e sem ela nenhum deploy que instale por `git+…@main` alcança a versão nova) e
-> o **`LIB-03`** (pin + `no-cache-filters`).
+> histórico canônico desde a 1.14.0.
+>
+> **A 1.15.1 foi publicada em 08/09/2026** (`e3c847f`, tag `v1.15.1`), fechando o
+> `LIB-06`. Com ela fora, o item que resta na frente é o **`LIB-03`**
+> (pin + `no-cache-filters`): publicar põe a correção ao alcance do build, mas
+> não a põe no pod enquanto a camada do pip continuar congelada.
 
 ---
 
@@ -148,20 +150,24 @@
 - [x] **LIB-01** — **`CHANGELOG.md` existe** e é o histórico canônico desde a
       1.14.0 (a tabela da [SPEC §12](SPEC.md) ficou como índice das versões).
       Fechado ao conferir em 08/09/2026.
-- [ ] **LIB-06** — **Publicar a 1.15.1.** Conferido em 08/09/2026: o `main` do
-      repo publicado está em **1.15.0**, e é ele que os consumidores instalam por
-      `@main` — a correção do envelope (recusa de escrita chegando como `201`)
-      não alcançou pod nenhum. É a metade viva do `ST-31`/`OF-03`, e é
-      pré-requisito do `LIB-03`: não se pina o que não foi publicado.
-- [ ] **LIB-02** — Tags Git para as versões intermediárias. Confirmado no remoto
-      em 08/09/2026: existem **só** `v1.8.0` e `v1.12.0` — 1.9/1.10/1.11 e toda a
-      linha 1.13–1.15 não têm tag, então não há como pinar.
+- [x] **LIB-06** — **1.15.1 publicada** em 08/09/2026 (commit `e3c847f` no `main`
+      de `automaxia/automaxia-shared-utils`, mais a tag `v1.15.1`), com os 116
+      testes verdes. Até então o `main` estava em 1.15.0 e a correção do envelope
+      (recusa de escrita chegando como `201`) não tinha alcançado pod nenhum.
+      Fechou a metade viva do `ST-31`/`OF-03` e destravou o `LIB-03`.
+      - Foi junto o sync do monorepo: renomeação Turing → Harvest nos
+        comentários/exemplos (`ST-32`) e os docs no padrão MAIÚSCULO
+        (`docs/spec.md` → `docs/SPEC.md`, idem TASKS).
+- [ ] **LIB-02** — Tags Git para as versões **intermediárias**. Conferido no
+      remoto em 08/09/2026: existem `v1.8.0`, `v1.12.0` e agora `v1.15.1` —
+      1.9/1.10/1.11 e a linha 1.13–1.15.0 continuam sem tag. Já dá para pinar a
+      versão corrente; o que falta é poder pinar as antigas.
 - [ ] **LIB-03** — **Pin de versão nos consumidores.** Todos instalam
       `git+…@main` sem pin (conferido em 08/09/2026 nos `requirements.txt` de
       `harvest-api`, `office-api` e irmãos); com `cache-from: type=gha` a lib
       congela na versão do dia em que a camada nasceu. Combinar `no-cache-filters`
-      no estágio de deps + uma tag da linha 1.15 no `requirements.txt` — o que
-      depende do `LIB-06` e do `LIB-02`.
+      no estágio de deps + `@v1.15.1` no `requirements.txt`. **Destravado em
+      08/09/2026** pelo `LIB-06`: a tag existe, então agora é só fazer.
 - [ ] **LIB-04** — Documentar processo de release (bump em `setup.py`
       **e em `automaxia_utils/__init__.py`** — os dois divergiram até 08/09/2026 —,
       tag, push, atualizar consumidores).
