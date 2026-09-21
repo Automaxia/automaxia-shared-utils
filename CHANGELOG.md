@@ -8,6 +8,22 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.18.0] — 2026-09-21
+
+Responsável técnico: Wesley Romualdo da Silva
+
+### Adicionado
+
+- **Camada semântica: `ResolvedConnection.metrics`.** O `/database-connection/resolve`
+  do AdminCenter (migration 0054) passa a entregar as métricas de negócio
+  ATIVAS da conexão — a definição oficial de cada uma: `name`, `slug`,
+  `synonyms`, `description`, `base_table`, `expression`, `filter_sql`,
+  `time_column`, `format`. O Talk as usa na geração do SQL, para "receita"
+  ou "cliente ativo" significarem sempre a mesma coisa.
+  - AdminCenter antigo (sem o campo) → lista vazia, nunca `None`.
+
+---
+
 ## [1.17.0] — 2026-09-17
 
 Responsável técnico: Wesley Romualdo da Silva

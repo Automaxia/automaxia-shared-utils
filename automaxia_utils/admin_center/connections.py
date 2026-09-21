@@ -117,6 +117,10 @@ class ResolvedConnection:
     allowed_schemas: Optional[List[str]] = None
     allowed_tables: Optional[List[str]] = None
     denied_statements: Optional[List[str]] = None
+    # Camada semantica (AdminCenter 0054): metricas de negocio ATIVAS da
+    # conexao — cada uma `{name, slug, synonyms, description, base_table,
+    # expression, filter_sql, time_column, format}`. Lista vazia = nenhuma.
+    metrics: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ResolvedConnection":
@@ -158,6 +162,9 @@ class ResolvedConnection:
             allowed_schemas=data.get("allowed_schemas"),
             allowed_tables=data.get("allowed_tables"),
             denied_statements=data.get("denied_statements"),
+            # `or []`: AdminCenter antigo nao manda o campo, e `None` quebraria
+            # quem itera sem checar.
+            metrics=list(data.get("metrics") or []),
             version=int(data.get("version", 1)),
             expires_at=expires_at,
         )
