@@ -86,6 +86,11 @@ class ProductManifest:
     permissions: List[Dict[str, Any]] = field(default_factory=list)
     # Cada menu: {'key': str, 'label': str, 'icon'?: str, 'route'?: str, 'requires'?: str, 'order'?: int}
     menus: List[Dict[str, Any]] = field(default_factory=list)
+    # Fluxos de agentes (1.19.0, SDD §5.11.3). None = nao declarado.
+    # tools: `RegistroDeFerramentas.specs()` — o que os fluxos podem chamar.
+    # flow_entrypoints: [{'key', 'entradas': {nome: tipo}, 'saida_obrigatoria': [..]}]
+    tools: Optional[List[Dict[str, Any]]] = None
+    flow_entrypoints: Optional[List[Dict[str, Any]]] = None
 
     def to_payload(self) -> Dict[str, Any]:
         """Converte para o payload JSON aceito por POST /product/register.

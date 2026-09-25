@@ -6,15 +6,19 @@
 > lado servidor destes contratos vive no
 > [`admincenter-api`](../../admincenter-api/docs/SPEC.md).
 
-**Versão da lib:** **1.15.1** (`setup.py:version`).
+**Versão da lib:** **1.19.0** (`setup.py:version`).
 **Aderente ao `admincenter-api` até a migration `0044`** — é a `execution_steps`
 que fecha o contrato consumido; as migrations posteriores (0045–0051) são de
 catálogo e não mudam o que a lib fala.
-Última revisão: **2026-09-08**.
+Última revisão: **2026-09-21**.
 
-> ✅ **A 1.15.1 está PUBLICADA** desde 08/09/2026, com a tag `v1.15.1` — commit
-> `e3c847f` no `main` de `automaxia/automaxia-shared-utils`, que é o que todo
-> `requirements.txt` instala por `@main`. Antes disso a 1.15.1 existia só no
+> ✅ **A 1.17.0 está PUBLICADA** desde 21/09/2026, com a tag `v1.17.0` — commit
+> `dc30e6c` no `main` de `Automaxia/automaxia-shared-utils`, que é o que todo
+> `requirements.txt` instala por `@main`. A 1.16.0 e a 1.17.0 ficaram seis dias
+> só no monorepo, e o CI do `talk-api` e do `vision-api` — que testa contra a lib
+> publicada — falhou em todo push nesse tempo (`LIB-07`).
+>
+> Histórico: a 1.15.1 foi publicada em 08/09/2026 (tag `v1.15.1`, `e3c847f`). Antes disso a 1.15.1 existia só no
 > monorepo e **nenhum pod tinha a correção do envelope**, que é justamente a que
 > faz uma recusa de escrita deixar de passar por sucesso. Fechou o `LIB-06` e a
 > metade viva do `ST-31`/`OF-03`.
@@ -250,7 +254,8 @@ with admin.get_db_session('base_do_cliente') as s:             # commit/rollback
   mesmo JWT do serviço. Resposta = `ResolvedConnection` (id, alias, engine, host,
   port, database_name, schema_name, username/password **decifrados**, use_tunnel,
   tunnel_type, tunnel_config, access_level, allowed_schemas/tables,
-  denied_statements, `version`, `expires_at`).
+  denied_statements, `allowed_tables`, `metrics` (1.18.0), `version`,
+  `expires_at`).
 - **Cache** por alias no processo, conferindo `is_expired()`. `version` diferente
   invalida a entrada e **fecha o túnel SSH antigo** — é isso que permite
   rotacionar senha sem reiniciar o produto.
@@ -434,7 +439,11 @@ AUTH_PRODUCT_GATE_FAIL_OPEN=false  # só para destravar incidente
 | v1.13.0 | `fastapi` e `python-jose` declarados como extras (CI da lib passa) |
 | v1.14.0 *(2026-08-26)* | Sincronização com a `infrabalance-shared-utils` 2.9.0: gate de produto voltou a funcionar (`ADMIN_CENTER_PRODUCT_SLUG`), auth em dev deixa de bater em produção, `ResolvedConnection` cobre `rest`/`arcgis`/`databricks` e os campos da migration 0042, `log_min_level`, desmembramento do `context` do log, guardas de `has_logging_identity()`, descoberta de `product_id`/`environment_id` por slug, `log_process(execution_id=…)`. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
 | v1.15.0 *(2026-08-31)* | **Execução observável**: `agent_step`/`execution_scope`/`log_step` gravam a linha do tempo de dentro de uma execução (`execution_steps`, migration 0044), com o modelo EFETIVO por etapa; `log_process` ganha `agent_slug`/`area_agent_slug`/`connection_id` (migration 0043) resolvendo pelo mesmo cache do token tracking; passos vão num POST só. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
-| **v1.15.1** *(atual, 2026-09-04)* | **Recusa de escrita viajava dentro de um `201`**: as rotas `POST /logs/*` declaram `status_code=201` no decorator e devolvem a rejeição no envelope (`success:false`), então o batch worker contabilizava "1/1 enviados" para uma linha que nunca existiu. Passou a inspecionar o envelope (`_envelope_aceito`) e a logar a recusa em **WARNING** — antes até falha de rede saía em `debug`. Foi o que escondeu um produto gravando **zero** `application_logs` por dias. |
+| **v1.19.0** *(atual, 2026-09-25)* | **Produtos derivados e fluxos**: `product_scope`, `product_id` explícito na telemetria, `JobRunner(produtos_filhos=True)` + `register_derivados`, `automaxia_utils.flows` (`FlowRunner`, ferramentas, `validar_fluxo`), `tools`/`flow_entrypoints` no manifest. Exige admincenter-api com a migration `0061` para gravar em produto filho. |
+| **v1.18.0** *(2026-09-21, publicada no mesmo dia — `c3001a6`)* | **Camada semântica**: `ResolvedConnection.metrics` — as métricas de negócio ATIVAS da conexão (migration `0054` do AdminCenter). Lista vazia com AdminCenter anterior. |
+| **v1.17.0** *(2026-09-17, publicada 21/09)* | **Allowlist de tabelas por conexão**: `sql_allowlist` (`tabelas_referenciadas`, `verificar_sql`, `DIALETOS_SQLGLOT`, via sqlglot) e `allowed_tables` no `ResolvedConnection`. Os satélites recusam, ANTES do banco, SQL que lê objeto fora da lista (migration `0053` do AdminCenter). |
+| **v1.16.0** *(2026-09-15, publicada junto com a 1.17)* | **BigQuery no cofre**: engine `bigquery` no `ConnectionResolver` (projeto como catálogo, dataset como schema). |
+| **v1.15.1** *(2026-09-04)* | **Recusa de escrita viajava dentro de um `201`**: as rotas `POST /logs/*` declaram `status_code=201` no decorator e devolvem a rejeição no envelope (`success:false`), então o batch worker contabilizava "1/1 enviados" para uma linha que nunca existiu. Passou a inspecionar o envelope (`_envelope_aceito`) e a logar a recusa em **WARNING** — antes até falha de rede saía em `debug`. Foi o que escondeu um produto gravando **zero** `application_logs` por dias. |
 
 Distribuição: `pip install git+https://github.com/Automaxia/automaxia-shared-utils.git`.
 Sem PyPI. A partir da 1.14.0 o histórico canônico é o

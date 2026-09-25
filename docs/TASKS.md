@@ -5,7 +5,7 @@
 > **Convenção de ID:** itens abertos usam `LIB-##`. Itens concluídos ficam como
 > checklist histórica, sem ID.
 
-Última revisão: **2026-09-08** · lib **1.15.1**.
+Última revisão: **2026-09-21** · lib **1.18.0**.
 
 > O backlog abaixo foi escrito na 1.12.0 e continua válido — o que entrou depois
 > (1.13.0 → 1.15.1) está no [`../CHANGELOG.md`](../CHANGELOG.md), que é o
@@ -150,6 +150,17 @@
 - [x] **LIB-01** — **`CHANGELOG.md` existe** e é o histórico canônico desde a
       1.14.0 (a tabela da [SPEC §12](SPEC.md) ficou como índice das versões).
       Fechado ao conferir em 08/09/2026.
+- [x] **LIB-33** — **1.18.0 publicada no mesmo dia** (21/09/2026, commit
+      `c3001a6`, tag `v1.18.0`, 144 testes verdes): `ResolvedConnection.metrics`.
+      Lição da 1.17.0 aplicada — não ficou nem um dia só no monorepo.
+- [x] **LIB-07** — **1.17.0 publicada** em 21/09/2026 (commit `dc30e6c` no `main`
+      de `Automaxia/automaxia-shared-utils`, tag `v1.17.0`; 142 testes verdes).
+      A 1.16.0 (BigQuery) e a 1.17.0 (`sql_allowlist`) estavam só no monorepo
+      desde 15 e 17/09: o CI do `talk-api` e do `vision-api` falhava em todo
+      push com "verificador indisponível", porque o que eles instalam é o `main`
+      publicado. A 1.16.0 não ganhou tag própria (foi junto).
+      ⚠️ O remoto mudou de nome: `automaxia/…` responde com redirect para
+      `Automaxia/automaxia-shared-utils`.
 - [x] **LIB-06** — **1.15.1 publicada** em 08/09/2026 (commit `e3c847f` no `main`
       de `automaxia/automaxia-shared-utils`, mais a tag `v1.15.1`), com os 116
       testes verdes. Até então o `main` estava em 1.15.0 e a correção do envelope
@@ -313,3 +324,19 @@
 - **Sem retry de webhook outbound** entre lib e AdminCenter — se o produto
   está atrás de NAT/proxy intermitente, eventos podem ser perdidos
   (mitigado pelo `force_run_at` no AdminCenter).
+
+## 1.19.0 — produtos derivados e fluxos (2026-09-25)
+
+- [x] **LIB-34** — `product_scope` + `product_id` explícito na telemetria (SDD
+      §5.12). Testes em `tests/test_escopo_produto.py`.
+- [x] **LIB-35** — `JobRunner(produtos_filhos=True)` + `register_derivados`.
+      Testes em `tests/test_jobrunner_filhos.py`.
+- [x] **LIB-36** — `automaxia_utils.flows` (`FlowRunner`, ferramentas,
+      validação). Testes em `tests/test_flow_runner.py`.
+- [x] **LIB-37** — Lote de passos por produto e `execution_scope` em ContextVar.
+- [ ] **LIB-38** — **Publicar a 1.19.0** no repositório da lib no mesmo dia do
+      commit no monorepo, e conferir `automaxia_utils.__version__` **no pod** do
+      Forge (§2.1 do SDD do ecossistema: lib só no monorepo é código que nenhum
+      consumidor tem).
+- [ ] **LIB-39** — `FlowRunner` assíncrono (hoje síncrono, com ramos em threads).
+      O Forge roda no `forge-worker`; na tela, via `run_in_threadpool`.

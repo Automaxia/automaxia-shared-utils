@@ -15,6 +15,7 @@ from datetime import datetime
 from threading import Thread, Lock, local
 from queue import Queue, Empty
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from decouple import config
 from uuid import UUID
@@ -176,6 +177,36 @@ class AdminCenterEndpoints:
 #: pipelines em paralelo no mesmo processo nao podem compartilhar numeracao.
 _step_local = local()
 
+#: Produto a que a telemetria pertence quando NAO e' o da config (produto
+#: derivado, SDD §5.12 do ecossistema, 1.19.0). ContextVar e nao thread-local:
+#: o FlowRunner despacha ramos paralelos em threads com
+#: `contextvars.copy_context()`, e o escopo precisa ir junto — um thread-local
+#: ficaria para tras e o passo do ramo cairia no produto pai.
+_product_scope: ContextVar = ContextVar('automaxia_product_scope', default=None)
+
+
+class _EscopoExecucao:
+    """Correlacao + numeracao de UM `execution_scope` (1.19.0).
+
+    Vive num ContextVar, e nao so' no `_step_local`, para atravessar threads
+    copiadas com `contextvars.copy_context()` — os ramos paralelos do
+    FlowRunner. A sequencia e' compartilhada entre esses ramos, por isso o lock.
+    """
+
+    def __init__(self, correlation_id: str):
+        self.correlation_id = correlation_id
+        self._seq = 0
+        self._lock = Lock()
+
+    def proximo(self) -> int:
+        with self._lock:
+            atual = self._seq
+            self._seq += 1
+            return atual
+
+
+_exec_scope: ContextVar = ContextVar('automaxia_exec_scope', default=None)
+
 
 class _StepHandle:
     """O que `agent_step` entrega ao bloco `with`.
@@ -186,8 +217,11 @@ class _StepHandle:
     """
 
     def __init__(self, service, label, kind, seq, agent_id, area_agent_id,
-                 connection_id, model_name, detail):
+                 connection_id, model_name, detail, product_id=None):
         self._service = service
+        # Fixado na ENTRADA da etapa: a linha final pode sair em outro contexto
+        # (fora do `product_scope`) e ainda assim precisa ir para o mesmo produto.
+        self._product_id = product_id
         self._label = label
         self._kind = kind
         self._seq = seq
@@ -208,7 +242,8 @@ class _StepHandle:
                                agent_id=self._agent_id,
                                area_agent_id=self._area_agent_id,
                                connection_id=self._connection_id,
-                               model_name=self._model_name, percent=percent)
+                               model_name=self._model_name, percent=percent,
+                               product_id=self._product_id)
 
     def note(self, label: str, kind: str = 'decision', detail: Dict = None):
         """Registra algo que aconteceu DENTRO da etapa e merece linha propria —
@@ -217,7 +252,8 @@ class _StepHandle:
                                agent_id=self._agent_id,
                                area_agent_id=self._area_agent_id,
                                connection_id=self._connection_id,
-                               model_name=self._model_name, detail=detail)
+                               model_name=self._model_name, detail=detail,
+                               product_id=self._product_id)
 
     def done(self, tokens_in: int = None, tokens_out: int = None,
              detail: Dict = None):
@@ -241,7 +277,8 @@ class _StepHandle:
             percent=100 if status == 'ok' else None,
             tokens_in=self._tokens_in, tokens_out=self._tokens_out,
             duration_ms=int((time.time() - inicio) * 1000),
-            error_message=erro, detail=self._detail
+            error_message=erro, detail=self._detail,
+            product_id=self._product_id
         )
 
 
@@ -586,8 +623,12 @@ class AdminCenterService:
 
     def _validate_token_usage_payload(self, payload: Dict) -> bool:
         """Valida payload de token usage antes do envio"""
-        required_fields = ["product_id", "environment_id", "model_id", 
+        required_fields = ["product_id", "model_id",
                           "prompt_tokens", "completion_tokens"]
+        # Ambiente e' do produto da config. Produto derivado (product_scope)
+        # grava sem ambiente — o da chave e' do pai (1.19.0).
+        if str(payload.get("product_id")) == str(self.config.product_id or ''):
+            required_fields.append("environment_id")
         
         for field in required_fields:
             if field not in payload or payload[field] is None:
@@ -776,7 +817,8 @@ class AdminCenterService:
                          prompt_id: str = None, metadata: Dict = {},
                          agent_slug: str = None, agent_id: str = None,
                          area_agent_slug: str = None,
-                         area_agent_id: str = None) -> bool:
+                         area_agent_id: str = None,
+                         product_id: str = None) -> bool:
         """
         Registra uso de tokens de IA - SEMPRE ASSÍNCRONO para máxima performance
 
@@ -806,10 +848,14 @@ class AdminCenterService:
                         `agents.id`, então id inventado derrubaria a escrita.
             prompt_id: ID do prompt cadastrado no AdminCenter (opcional).
                        Permite analytics de uso por prompt.
+            product_id: produto a que o consumo pertence, quando nao e' o da
+                       config (produto derivado, 1.19.0). Dentro de
+                       `product_scope` nao precisa ser passado.
         """
         if not self.config.enabled:
             return False
-        if not self.config.has_logging_identity():
+        pid, env = self._identidade_de_log(product_id)
+        if not pid:
             self.logger.debug(
                 "record_token_usage pulado: product_id/environment_id nao configurados"
             )
@@ -822,7 +868,7 @@ class AdminCenterService:
         if model_name:
             model_id = self._get_model_id_by_name(model_name)
         elif agent_slug:
-            model_id, resolved_name = self._resolve_agent_model(agent_slug)
+            model_id, resolved_name = self._resolve_agent_model(agent_slug, pid)
 
         if not model_id:
             self.logger.warning(
@@ -838,13 +884,12 @@ class AdminCenterService:
         # senão traduz o slug. Sem etapa explícita, a etapa é a própria área.
         etapa_slug = (agent_slug or '').strip() or (area_agent_slug or '').strip()
         if not agent_id and etapa_slug:
-            agent_id = self.resolve_agent_id(etapa_slug)
+            agent_id = self.resolve_agent_id(etapa_slug, pid)
         if not area_agent_id and (area_agent_slug or '').strip():
-            area_agent_id = self.resolve_agent_id(area_agent_slug.strip())
+            area_agent_id = self.resolve_agent_id(area_agent_slug.strip(), pid)
 
         payload = {
-            "product_id": self.config.product_id,
-            "environment_id": self.environment_id,
+            "product_id": pid,
             "model_id": model_id,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
@@ -861,6 +906,8 @@ class AdminCenterService:
             }
         }
 
+        if env:
+            payload["environment_id"] = env
         if request_id:
             payload["request_id"] = request_id
         if user_id:
@@ -963,7 +1010,7 @@ class AdminCenterService:
         que o trabalho que ela mede. O TTL e' o que faz o vinculo recem-criado
         no painel passar a valer sozinho.
         """
-        pid = product_id or self.config.product_id
+        pid = self._produto_efetivo(product_id)
         cache_key = f"{pid}:{agent_slug}"
         agora = time.time()
 
@@ -982,7 +1029,7 @@ class AdminCenterService:
             elif not (exigir_modelo and cached.get("_model_pendente")):
                 return cached
 
-        ep = self.get_effective_prompt(agent_slug, product_id)
+        ep = self.get_effective_prompt(agent_slug, pid)
         if not ep:
             with self._cache_lock:
                 self._effective_model_cache[cache_key] = {
@@ -1032,7 +1079,7 @@ class AdminCenterService:
         modelo do agente no AdminCenter)."""
         with self._cache_lock:
             if agent_slug:
-                pid = product_id or self.config.product_id
+                pid = self._produto_efetivo(product_id)
                 self._effective_model_cache.pop(f"{pid}:{agent_slug}", None)
             else:
                 self._effective_model_cache.clear()
@@ -1250,7 +1297,8 @@ class AdminCenterService:
                output_data: Dict = None, job_id: str = None,
                execution_id: Any = None, agent_slug: str = None,
                area_agent_slug: str = None, agent_id: str = None,
-               area_agent_id: str = None, connection_id: str = None) -> bool:
+               area_agent_id: str = None, connection_id: str = None,
+               product_id: str = None) -> bool:
         """
         Registra log de processo de negócio - SEMPRE ASSÍNCRONO
 
@@ -1281,20 +1329,25 @@ class AdminCenterService:
         connection_id: sobre qual base do cofre o processo rodou. Sem ele, essa
         pergunta só se responde garimpando `input_data`, quando o produto
         lembrou de gravar.
+
+        product_id: produto a que o RUN pertence quando não é o da config
+        (produto derivado, 1.19.0) — é o que põe a execução na fatura do
+        produto certo. Dentro de `product_scope` não precisa ser passado.
         """
         if not self.config.enabled:
             return False
-        if not self.config.has_logging_identity():
+        pid, env = self._identidade_de_log(product_id)
+        if not pid:
             self.logger.debug(
                 "log_process pulado: product_id/environment_id nao configurados"
             )
             return False
 
         try:
-            product_uuid = UUID(self.config.product_id)
-            environment_uuid = UUID(self.environment_id)
+            product_uuid = UUID(str(pid))
+            environment_uuid = UUID(str(env)) if env else None
         except ValueError as e:
-            self.logger.error(f"IDs inválidos: product_id={self.config.product_id}, environment_id={self.environment_id}")
+            self.logger.error(f"IDs inválidos: product_id={pid}, environment_id={env}")
             return False
 
         now = datetime.utcnow()
@@ -1313,7 +1366,7 @@ class AdminCenterService:
 
         payload = {
             "product_id": str(product_uuid),
-            "environment_id": str(environment_uuid),
+            "environment_id": str(environment_uuid) if environment_uuid else None,
             "job_id": job_id,
             "process_name": process_name,
             "status": status.lower(),
@@ -1333,9 +1386,9 @@ class AdminCenterService:
         # Dimensoes de agente (0043). Slug tem precedencia menor que o id
         # explicito: quem ja' resolveu o UUID nao paga a resolucao de novo.
         if not agent_id and agent_slug:
-            agent_id = self.resolve_agent_id(agent_slug)
+            agent_id = self.resolve_agent_id(agent_slug, pid)
         if not area_agent_id and (area_agent_slug or '').strip():
-            area_agent_id = self.resolve_agent_id(area_agent_slug.strip())
+            area_agent_id = self.resolve_agent_id(area_agent_slug.strip(), pid)
 
         # UUID invalido e' DESCARTADO, nunca enviado: o campo e' tipado como
         # UUID do outro lado e um valor torto recusaria o lote inteiro.
@@ -1377,6 +1430,61 @@ class AdminCenterService:
     # porque o relatorio decide o que cobra pelo NOME do processo
     # (`isBillable`), nao por `parent_execution_id`.
 
+    # ==================== PRODUTO DERIVADO (1.19.0) ====================
+    #
+    # Um satelite que HOSPEDA outros produtos (o Forge, SDD §5.12) grava a
+    # telemetria de cada execucao no produto que rodou, nao no dele. O escopo
+    # e' o jeito de fazer isso sem passar `product_id` em cada chamada: dentro
+    # dele, token, run (`log_process`), passos e a resolucao de agente/prompt/
+    # modelo vao para o produto do escopo. O backend so' aceita se a chave for
+    # a do PAI desse produto. `log_execution`/`log_application` ficam no
+    # produto da config: sao o satelite atendendo a request.
+
+    def product_scope(self, product_id: str):
+        """Atribui a telemetria do bloco a `product_id` (produto derivado).
+
+            with admin.product_scope(derivado_id):
+                admin.log_process('forge.execucao', 'started', ...)
+                with admin.agent_step('analista', label='analisando'):
+                    ...
+
+        O ambiente da config NAO vai junto: ele e' do produto pai. Reentrante —
+        o escopo de dentro vale ate' sair, e o de fora volta. Levanta
+        `ValueError` se o id nao for UUID: atribuir consumo a um produto torto
+        e' pior que falhar alto na entrada.
+        """
+        return self._product_scope_cm(product_id)
+
+    @contextmanager
+    def _product_scope_cm(self, product_id: str):
+        try:
+            pid = str(UUID(str(product_id)))
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError(f"product_scope: '{product_id}' nao e' UUID valido")
+        token = _product_scope.set(pid)
+        try:
+            yield pid
+        finally:
+            _product_scope.reset(token)
+
+    def _produto_efetivo(self, product_id: str = None) -> Optional[str]:
+        """Explicito > escopo > config."""
+        return product_id or _product_scope.get() or self.config.product_id
+
+    def _identidade_de_log(self, product_id: str = None):
+        """`(product_id, environment_id)` de uma escrita de telemetria.
+
+        `(None, None)` quando nao da para logar. Para o produto da config vale
+        a regra de sempre (`has_logging_identity`); para outro produto (escopo
+        ou explicito) o ambiente fica de fora — o da config e' do pai.
+        """
+        pid = self._produto_efetivo(product_id)
+        if not pid or str(pid) == str(self.config.product_id or ''):
+            if not self.config.has_logging_identity():
+                return None, None
+            return self.config.product_id, self.environment_id
+        return str(pid), None
+
     def execution_scope(self, correlation_id: str = None):
         """Agrupa os passos de UMA execucao logica que nao vem de job.
 
@@ -1397,7 +1505,9 @@ class AdminCenterService:
     def _execution_scope(self, correlation_id: str = None):
         anterior_corr = getattr(_step_local, 'correlation_id', None)
         anterior_seq = getattr(_step_local, 'seq', 0)
+        token = _exec_scope.set(_EscopoExecucao(correlation_id or ''))
         corr = correlation_id or str(uuid.uuid4())
+        _exec_scope.get().correlation_id = corr
         _step_local.correlation_id = corr
         _step_local.seq = 0
         try:
@@ -1405,8 +1515,12 @@ class AdminCenterService:
         finally:
             _step_local.correlation_id = anterior_corr
             _step_local.seq = anterior_seq
+            _exec_scope.reset(token)
 
     def _next_step_seq(self) -> int:
+        escopo = _exec_scope.get()
+        if escopo is not None:
+            return escopo.proximo()
         atual = getattr(_step_local, 'seq', 0)
         _step_local.seq = atual + 1
         return atual
@@ -1418,7 +1532,7 @@ class AdminCenterService:
                  percent: int = None, model_name: str = None,
                  tokens_in: int = None, tokens_out: int = None,
                  duration_ms: int = None, error_message: str = None,
-                 detail: Dict = None) -> bool:
+                 detail: Dict = None, product_id: str = None) -> bool:
         """Enfileira UM passo. Nivel baixo — prefira `agent_step`.
 
         `label` e' obrigatorio e vai para humano. Passo sem frase legivel e' log
@@ -1429,7 +1543,8 @@ class AdminCenterService:
         if not (label or '').strip():
             self.logger.debug("log_step ignorado: label vazio")
             return False
-        if not self.config.has_logging_identity():
+        pid, env = self._identidade_de_log(product_id)
+        if not pid:
             self.logger.debug(
                 "log_step pulado: product_id/environment_id nao configurados"
             )
@@ -1447,11 +1562,12 @@ class AdminCenterService:
 
         # Sem run, cai na correlacao do escopo (se houver).
         if not run_id and not correlation_id:
-            correlation_id = getattr(_step_local, 'correlation_id', None)
+            escopo = _exec_scope.get()
+            correlation_id = escopo.correlation_id if escopo is not None \
+                else getattr(_step_local, 'correlation_id', None)
 
         payload = {
-            "product_id": str(self.config.product_id),
-            "environment_id": str(self.environment_id),
+            "product_id": str(pid),
             "seq": seq if seq is not None else self._next_step_seq(),
             "kind": (kind or 'step')[:20],
             "label": label,
@@ -1481,6 +1597,8 @@ class AdminCenterService:
                              ("error_message", error_message)):
             if valor is not None:
                 payload[chave] = valor
+        if env:
+            payload["environment_id"] = str(env)
         if detail:
             payload["detail"] = detail
 
@@ -1490,7 +1608,7 @@ class AdminCenterService:
     def agent_step(self, agent_slug: str = None, label: str = None,
                    kind: str = 'step', connection_id: str = None,
                    area_agent_slug: str = None, detail: Dict = None,
-                   stream: bool = True):
+                   stream: bool = True, product_id: str = None):
         """Marca uma etapa do trabalho de um agente.
 
             with admin.agent_step('harvest-mapeador-sql',
@@ -1518,19 +1636,22 @@ class AdminCenterService:
         """
         texto = (label or agent_slug or 'etapa').strip()
         seq = self._next_step_seq()
-        info = self._resolve_agent_info(agent_slug) if agent_slug else {}
+        # Produto fixado na entrada (explicito > product_scope > config): o
+        # agente, o modelo e todas as linhas da etapa vao para o mesmo produto.
+        pid = self._produto_efetivo(product_id)
+        info = self._resolve_agent_info(agent_slug, pid) if agent_slug else {}
         agent_id = info.get("agent_id")
         model_name = info.get("model_name")
-        area_agent_id = self.resolve_agent_id(area_agent_slug) if area_agent_slug else None
+        area_agent_id = self.resolve_agent_id(area_agent_slug, pid) if area_agent_slug else None
 
         handle = _StepHandle(self, texto, kind, seq, agent_id, area_agent_id,
-                             connection_id, model_name, detail)
+                             connection_id, model_name, detail, product_id=pid)
 
         if stream:
             self.log_step(texto, kind=kind, status='running', seq=seq,
                           agent_id=agent_id, area_agent_id=area_agent_id,
                           connection_id=connection_id, model_name=model_name,
-                          percent=0, detail=detail)
+                          percent=0, detail=detail, product_id=pid)
 
         inicio = time.time()
         try:
@@ -1676,7 +1797,7 @@ class AdminCenterService:
         if not self.config.enabled:
             return None
 
-        pid = product_id or self.config.product_id
+        pid = self._produto_efetivo(product_id)
         endpoint = AdminCenterEndpoints.EFFECTIVE_PROMPT.format(pid, agent_slug)
         response = self._make_request("GET", endpoint)
 
@@ -1721,7 +1842,7 @@ class AdminCenterService:
             self.logger.warning("list_allowed_agents chamado sem user_bearer_token")
             return []
 
-        pid = product_id or self.config.product_id
+        pid = self._produto_efetivo(product_id)
         cache_key = f"{user_bearer_token}:{pid or ''}"
         now = time.time()
 
@@ -1930,8 +2051,16 @@ class AdminCenterService:
         # aqui e' o que torna o passo barato: um pipeline de 16 etapas vira 1
         # POST, nao 32. Sem isso, a granularidade fina que a tabela existe para
         # permitir sairia cara justamente onde ela mais serve.
-        passos = [p for tipo, p in batch if tipo == "execution_step"]
-        if passos:
+        #
+        # Um POST POR PRODUTO (1.19.0): um satelite que hospeda produtos
+        # derivados mistura, no mesmo lote, passos de varios produtos — e o
+        # backend ate' a 0061 resolvia o lote inteiro pelo primeiro item.
+        # Separar aqui mantem a atribuicao certa mesmo contra backend antigo.
+        por_produto: Dict[str, List[Dict]] = {}
+        for tipo, p in batch:
+            if tipo == "execution_step":
+                por_produto.setdefault(str(p.get("product_id")), []).append(p)
+        for passos in por_produto.values():
             try:
                 resp = self._make_request("POST", AdminCenterEndpoints.LOG_STEP, passos)
                 if self._envelope_aceito(resp):

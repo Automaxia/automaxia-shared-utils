@@ -2,7 +2,7 @@
 Automaxia Utils - Pacote compartilhado
 """
 
-__version__ = "1.18.0"
+__version__ = "1.19.0"
 __author__ = "Automaxia"
 
 # Importar de admin_center
@@ -39,6 +39,21 @@ from .token_tracking import (
     definir_agente,
     agente_atual,
     agente_em_uso,
+)
+
+# Fluxos de agentes (1.19.0) — FlowRunner, ferramentas, validacao
+from .flows import (
+    FlowRunner,
+    RegistroDeFerramentas,
+    Ferramenta,
+    ContextoFluxo,
+    PedidoLLM,
+    RespostaLLM,
+    ResultadoFluxo,
+    validar_fluxo,
+    FluxoInvalido,
+    IaNaoConfigurada,
+    LimiteExcedido,
 )
 
 # Importar de registration (auto-registro de produtos no AdminCenter)
@@ -82,6 +97,10 @@ except ImportError:
     _AUTH_AVAILABLE = False
 
 __all__ = [
+    # Fluxos de agentes (1.19.0)
+    "FlowRunner", "RegistroDeFerramentas", "Ferramenta", "ContextoFluxo",
+    "PedidoLLM", "RespostaLLM", "ResultadoFluxo", "validar_fluxo",
+    "FluxoInvalido", "IaNaoConfigurada", "LimiteExcedido",
     # Admin Center
     "AdminCenterService",
     "AdminCenterConfig",

@@ -8,6 +8,50 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.19.0] — 2026-09-25
+
+Responsável técnico: Wesley Romualdo da Silva
+
+Produtos derivados e fluxos de agentes — SDD do ecossistema §5.11 e §5.12. O
+primeiro consumidor é o Forge. Nenhum consumidor atual precisa mudar nada.
+
+### Adicionado
+
+- **`admin.product_scope(product_id)`**: dentro do bloco, token
+  (`track_token_usage`), run (`log_process`), passos (`agent_step`/`log_step`) e
+  a resolução de agente/prompt/modelo (`get_effective_prompt`,
+  `list_allowed_agents`) vão para o produto do escopo, **sem** o ambiente da
+  config (que é do pai). `ContextVar`, não thread-local: atravessa threads
+  copiadas com `contextvars.copy_context()`. O backend só aceita com a chave do
+  PAI do produto (admincenter-api `0061`).
+- **`product_id=` explícito** em `log_process`, `log_step`, `agent_step` e
+  `track_token_usage` (vence o escopo).
+- **`JobRunner(..., produtos_filhos=True)`** + **`register_derivados(handler)`**:
+  atende também a agenda dos produtos derivados (`GET /agent/job?incluir_filhos=true`).
+  O handler recebe o `_JobConfig` e roda dentro de `product_scope(job.product_id)`.
+  Jobs de filho têm chave interna `<product_id>:<slug>` — dois filhos podem ter
+  o mesmo slug. O "rodar agora" do painel chega a filho por `force_run_at`:
+  suba com `with_polling=True`.
+- **`automaxia_utils.flows`**: `FlowRunner`, `RegistroDeFerramentas`
+  (`@registro.ferramenta(...)`, `specs()` para o manifest), `validar_fluxo`,
+  `PedidoLLM`/`RespostaLLM` (o LLM é injetado — a lib não escolhe provedor),
+  erros `FluxoInvalido`/`IaNaoConfigurada`/`LimiteExcedido`. Regras no motor,
+  não no desenho: prompt e modelo só do AdminCenter; ferramenta de efeito não é
+  chamada em `modo='teste'`; cada nó é um `agent_step`.
+- **`ProductManifest.tools` e `.flow_entrypoints`** (`None` = não declarado).
+
+### Corrigido
+
+- **Lote de passos: um POST por produto.** O backend resolvia o lote inteiro
+  pelo primeiro item; com passos de vários produtos no mesmo lote, todos iam
+  para o primeiro (corrigido também no backend, `/logs/step` item a item).
+- **`execution_scope` atravessa threads.** A correlação e a numeração viviam só
+  em thread-local: o passo de um ramo paralelo saía sem `correlation_id` (fora
+  da execução no Office). Agora também num `ContextVar`, com a sequência
+  protegida por lock.
+
+---
+
 ## [1.18.0] — 2026-09-21
 
 Responsável técnico: Wesley Romualdo da Silva

@@ -65,6 +65,10 @@ class _JobConfig:
     config_version: int
     force_run_at: Optional[str]
     status: str
+    # Produto dono do job. Preenchido pelo backend desde a 0061; e' o que
+    # separa, no JobRunner de um satelite que hospeda produtos derivados, o job
+    # do proprio produto do job de um filho.
+    product_id: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "_JobConfig":
@@ -80,6 +84,7 @@ class _JobConfig:
             config_version=int(d.get("config_version") or 1),
             force_run_at=d.get("force_run_at"),
             status=d.get("status") or "active",
+            product_id=str(d["product_id"]) if d.get("product_id") else None,
         )
 
 
@@ -128,16 +133,27 @@ class JobCancelled(Exception):
 class JobRunner:
     """Coordena agendamento local + reporte ao AdminCenter."""
 
-    def __init__(self, admin_service, polling_interval: int = 60):
+    def __init__(self, admin_service, polling_interval: int = 60,
+                 produtos_filhos: bool = False):
         """
         Args:
             admin_service: instancia do AdminCenterService (singleton da lib)
             polling_interval: segundos entre polls de fallback (so usado quando
                               webhook nao esta disponivel ou para detectar
                               `force_run_at` que tenha escapado do webhook)
+            produtos_filhos: tambem atende a agenda dos produtos DERIVADOS que
+                              este produto hospeda (1.19.0, SDD §5.12). Os jobs
+                              dos filhos vao para o handler de
+                              `register_derivados`, rodando dentro de
+                              `product_scope(produto do job)` — o consumo cai no
+                              filho. O "rodar agora" do painel chega a filho por
+                              `force_run_at`: suba com `with_polling=True`.
         """
         self.svc = admin_service
         self.polling_interval = polling_interval
+        self.produtos_filhos = produtos_filhos
+        # Handler unico dos jobs de produtos filhos: recebe o `_JobConfig`.
+        self._handler_derivados: Optional[Callable[["_JobConfig"], None]] = None
 
         # Funcoes registradas pelo produto: { slug: callable }
         self._handlers: Dict[str, Callable[[], None]] = {}
@@ -177,6 +193,31 @@ class JobRunner:
         self._handlers[slug] = handler
         logger.info("JobRunner: handler registrado para %s", slug)
 
+    def register_derivados(self, handler: Callable[["_JobConfig"], None]) -> None:
+        """Handler UNICO dos jobs de produtos filhos (exige `produtos_filhos=True`).
+
+        Recebe o `_JobConfig` (`id`, `slug`, `product_id`, `name`…) e roda dentro
+        de `product_scope(job.product_id)`. O produto pai nao conhece de antemao
+        os slugs dos filhos — eles nascem quando alguem publica uma agenda —,
+        por isso um handler por slug nao serve aqui.
+        """
+        self._handler_derivados = handler
+        logger.info("JobRunner: handler de produtos derivados registrado")
+
+    def _eh_filho(self, cfg: "_JobConfig") -> bool:
+        proprio = str(getattr(self.svc.config, 'product_id', '') or '')
+        return bool(self.produtos_filhos and cfg.product_id and cfg.product_id != proprio)
+
+    def _chave(self, cfg: "_JobConfig") -> str:
+        """Chave interna do job. Slug e' unico so' DENTRO de um produto: dois
+        filhos podem ter o mesmo slug, entao o de filho leva o produto junto."""
+        return f"{cfg.product_id}:{cfg.slug}" if self._eh_filho(cfg) else cfg.slug
+
+    def _tem_handler(self, cfg: "_JobConfig") -> bool:
+        if self._eh_filho(cfg):
+            return self._handler_derivados is not None
+        return cfg.slug in self._handlers
+
     # ---------- Carregamento de config ----------
 
     def reload_jobs(self) -> None:
@@ -189,6 +230,8 @@ class JobRunner:
             params = {"product_id": self.svc.config.product_id}
             if self.svc.environment_id:
                 params["environment_id"] = self.svc.environment_id
+            if self.produtos_filhos:
+                params["incluir_filhos"] = "true"
             response = self.svc._make_request("GET", _Endpoints.AGENT_LIST, params=params)
         except Exception as e:
             logger.error("JobRunner: erro ao listar jobs: %s", e)
@@ -203,7 +246,7 @@ class JobRunner:
         for item in response["data"] or []:
             try:
                 cfg = _JobConfig.from_dict(item)
-                new_jobs[cfg.slug] = cfg
+                new_jobs[self._chave(cfg)] = cfg
                 new_by_id[cfg.id] = cfg
             except Exception as e:
                 logger.warning("JobRunner: job invalido recebido: %s — %s", item, e)
@@ -243,7 +286,7 @@ class JobRunner:
         for cfg in jobs_snapshot:
             if cfg.status != 'active' or not cfg.is_enabled:
                 continue
-            if cfg.slug not in self._handlers:
+            if not self._tem_handler(cfg):
                 logger.debug("JobRunner: ignorando %s (sem handler local)", cfg.slug)
                 continue
             # Job manual-only (sem cron) nao entra no APScheduler — so executa
@@ -271,8 +314,10 @@ class JobRunner:
 
     def _wrap_for_scheduler(self, cfg: _JobConfig) -> Callable:
         """Cria closure que dispara um job pelo APScheduler (origem 'cron')."""
+        chave = self._chave(cfg)
+
         def _runner():
-            self.run_job(cfg.slug, triggered_by="cron")
+            self.run_job(chave, triggered_by="cron")
         return _runner
 
     # ---------- Disparo manual / por webhook ----------
@@ -280,6 +325,9 @@ class JobRunner:
     def run_job(self, slug: str, triggered_by: str = "manual",
                 existing_run_id: Optional[str] = None) -> bool:
         """Executa o job referente ao slug. Reporta inicio/progresso/fim ao AdminCenter.
+
+        Job de produto filho (`produtos_filhos=True`) e' chamado pela chave
+        interna `<product_id>:<slug>`.
 
         Quando `existing_run_id` for fornecido, usa ele em vez de criar um novo
         via POST /agent/job/{job_id}/run. Necessario para fluxos onde o backend
@@ -292,7 +340,7 @@ class JobRunner:
         if not cfg:
             logger.error("JobRunner: job %s nao encontrado", slug)
             return False
-        if cfg.slug not in self._handlers:
+        if not self._tem_handler(cfg):
             logger.error("JobRunner: handler para %s nao registrado", slug)
             return False
         if not cfg.is_enabled or cfg.status != 'active':
@@ -329,7 +377,14 @@ class JobRunner:
                 self._active_runs[run_id] = ctx
 
         try:
-            self._handlers[slug]()
+            if self._eh_filho(cfg):
+                # O consumo e os passos do handler vao para o FILHO: o run ja' e'
+                # dele (o backend cria com o product_id do job), e o que o handler
+                # gravar tambem precisa ser.
+                with self.svc.product_scope(cfg.product_id):
+                    self._handler_derivados(cfg)
+            else:
+                self._handlers[cfg.slug]()
         except JobCancelled:
             duration_ms = int((time.time() - ctx.started_at) * 1000)
             logger.info("JobRunner: job %s cancelado por solicitacao do operador", slug)
@@ -510,7 +565,7 @@ class JobRunner:
                 if job_id:
                     cfg = runner_ref._jobs_by_id.get(job_id)
                     if cfg:
-                        slug = cfg.slug
+                        slug = runner_ref._chave(cfg)
 
                 logger.info("[Webhook] %s recebido para %s", event, slug or job_id)
 
@@ -576,7 +631,7 @@ class JobRunner:
                     # Detecta force_run_at recem-setado
                     with self._lock:
                         for slug, cfg in self._jobs.items():
-                            if cfg.force_run_at and slug in self._handlers:
+                            if cfg.force_run_at and self._tem_handler(cfg):
                                 # Compara com versao previa para nao re-executar
                                 prev_version = last_versions.get(slug, 0)
                                 if cfg.config_version > prev_version:
