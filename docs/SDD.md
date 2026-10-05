@@ -1,14 +1,15 @@
 # SDD — automaxia-shared-utils
 
-> Desenho interno da lib `automaxia_utils` **1.19.0**.
+> Desenho interno da lib `automaxia_utils` **1.20.2**.
 > Requisitos: [SPEC.md](SPEC.md) · Backlog: [TASKS.md](TASKS.md) ·
 > Histórico: [`../CHANGELOG.md`](../CHANGELOG.md)
 > Contratos transversais: [`../../../docs/SDD.md`](../../../docs/SDD.md) — **não
 > repetidos aqui** (JWT, cofre, auto-registro, silo `mode`, linha do tempo §5.6,
 > fluxos §5.11, produtos derivados §5.12).
 
-Última revisão: **2026-09-28** · lib **1.19.0 publicada** (`2d3a4bf`, tag
-`v1.19.0`, 25/09/2026); o código da lib não mudou desde então.
+Última revisão: **2026-10-05** · lib **1.20.2** (dia da semana sempre em lista, `LIB-44`);
+antes, no mesmo dia, a **1.20.1 publicada** (`e7efd42`, tag `v1.20.1`) — entrada opcional em ferramenta (1.20.0, §4.6) e o cron do `JobRunner`
+lido no padrão (1.20.1, §4.4, D-17). Antes, 28/09/2026 (1.19.0, `2d3a4bf`).
 
 > O desenho descrito aqui é o mesmo desde a 1.12.0; o que entrou depois foram
 > capacidades novas sobre ele:
@@ -25,6 +26,11 @@
 >   fluxos** `automaxia_utils.flows` (§4.6). Foi a primeira mudança de desenho
 >   desde a 1.12.0: estado de contexto passou a viver em `ContextVar`, não só em
 >   thread-local, para atravessar os ramos paralelos do runner.
+> - **1.20.0** — `opcionais=` na ferramenta (§4.6); o resto do motor igual.
+> - **1.20.1** — `gatilho_cron`: o `JobRunner` monta o gatilho do APScheduler
+>   com o dia da semana em nomes (§4.4, D-17).
+> - **1.20.2** — o dia da semana vira sempre lista explícita (`0-2` não vira mais
+>   `sun-tue`), com teste contra o croniter.
 >
 > Detalhe de cada versão em [`../CHANGELOG.md`](../CHANGELOG.md).
 
@@ -52,7 +58,7 @@ dependencies de permissão negam com 503 quando não conseguem decidir. Preferir
 |---|---|---|
 | `admin_center/service.py` | Fachada do control plane: config, JWT, fila de logs, prompts, tokens, variáveis, secrets | `requests` |
 | `admin_center/connections.py` | Broker do cofre: `ResolvedConnection` (+ `allowed_tables`, `metrics`) + cache + túnel; BigQuery (`build_bigquery_client`) | lazy: `psycopg2`, `sqlalchemy`, `sshtunnel`, `google-cloud-bigquery` |
-| `admin_center/jobs.py` | `JobRunner`: WS + listener HMAC + APScheduler + run lifecycle; modo `produtos_filhos` (1.19.0) | lazy: `apscheduler`, `croniter`, `aiohttp` |
+| `admin_center/jobs.py` | `JobRunner`: WS + listener HMAC + APScheduler + run lifecycle; modo `produtos_filhos` (1.19.0); `gatilho_cron` (1.20.1) | lazy: `apscheduler`, `croniter`, `aiohttp` |
 | `auth/middleware.py` | Validação de JWT + RBAC + gate de produto | **FastAPI** (opcional) |
 | `registration/client.py` | Manifest (+ `tools`/`flow_entrypoints`, 1.19.0), `POST /product/register`, heartbeat daemon | `requests` |
 | `migrations/runner.py` | `alembic upgrade` com retry | **alembic** (opcional) |
@@ -163,6 +169,20 @@ painel "Rodar agora"
              fim → POST …/finish {completed|failed|cancelled}
 ```
 
+**Cron → APScheduler (1.20.1, `LIB-43`).** Job com `cron_expression` entra no
+APScheduler local pelo `gatilho_cron(expressao, timezone)`: os 5 campos viram
+um `CronTrigger` explícito e o dia da semana passa por `_dia_da_semana`, que
+converte o cron padrão (0/7 = domingo) para uma **lista explícita** de nomes —
+`1-5` → `mon,tue,wed,thu,fri`, `0-2` → `sun,mon,tue`, `*/2` → `sun,tue,thu,sat`. Lista,
+e não intervalo, porque o APScheduler recusa intervalo que começa no domingo (para
+ele domingo é o último dia: `sun-tue` dá erro, `LIB-44`, 1.20.2) e ignora passo sobre
+nomes. `*`, `?` e nomes passam iguais; expressão sem 5
+campos cai no `from_crontab`. O motivo: o AdminCenter calcula o `next_run_at`
+com o croniter (padrão), e o `from_crontab` do APScheduler 3.x lê 0 = segunda —
+`1-5` disparava de terça a sábado (agendas do Forge, 03–05/10/2026). Erro ao
+montar o gatilho só loga e o job fica fora do agendador. `tests/test_gatilho_cron.py`
+compara 19 crons com o croniter.
+
 `job.cancel_run` seta `cancel_event` no `_RunContext`; se o handler não cooperar
 mas a flag ficou setada, o `run_job` reporta `cancelled` mesmo assim — o registro
 reflete o que o operador pediu.
@@ -237,7 +257,7 @@ FlowRunner(admin, registro, chamar_llm,
 | Definição do fluxo (JSON) | o produto (hoje, o Forge em `forge.*`) | recebida em `run(definicao, …)` — a lib **não** busca fluxo em lugar nenhum |
 | LLM | o produto | `chamar_llm(PedidoLLM) -> RespostaLLM`; a lib não escolhe provedor nem monta mensagens de API |
 | Prompt e modelo | AdminCenter | `admin.get_effective_prompt(slug)` do produto em escopo; sem vínculo ou sem `model_name` → `IaNaoConfigurada` (nunca texto/modelo de reserva) |
-| Ferramentas | o produto | `RegistroDeFerramentas`; `@registro.ferramenta(nome, versao, descricao, entradas, saida, selada, efeito)`; função `(ContextoFluxo, entradas, config) -> dict` |
+| Ferramentas | o produto | `RegistroDeFerramentas`; `@registro.ferramenta(nome, versao, descricao, entradas, saida, selada, efeito, opcionais)` (`opcionais` 1.20.0); função `(ContextoFluxo, entradas, config) -> dict` |
 | Declaração no manifest | o produto | `registro.specs()` → `ProductManifest.tools` (`name`, `version`, `descricao`, `entradas`, `saida`, `selada`, `efeito?`) |
 
 **Execução.** Fila de prontos sobre o grafo: um nó roda quando todas as arestas
@@ -278,8 +298,9 @@ Levanta só por `modo` inválido ou definição sem `formato: 1` (`FluxoInvalido
 **`validar_fluxo(definicao, ferramentas, entradas, saidas)`** devolve
 `[{nivel, no, msg}]` sem executar: nó solto, referência a nó que não roda antes
 ou a campo que ele não devolve, ramo sem destino, laço sem `max_voltas` (1–5),
-ferramenta não declarada, **entrada de ferramenta sem origem** (todas as
-`entradas` declaradas são obrigatórias — `LIB-40`), ferramenta de efeito sem
+ferramenta não declarada, **entrada de ferramenta sem origem** (toda entrada
+declarada é obrigatória, menos as de `opcionais` — 1.20.0, `LIB-40`; opcional
+fora de `entradas` é `ValueError` já no `adicionar`), ferramenta de efeito sem
 `config.destino`, saída sem o primeiro campo de `saidas`. Não confere agente
 contra o AdminCenter; o runner confere ao rodar.
 
@@ -319,6 +340,8 @@ descreve a trilha completa, proposta):
 | D-14 | "Teste não age" decidido **no motor** (1.19.0) | ferramenta de efeito (e-mail, webhook, WhatsApp) não pode depender do desenho nem da própria ferramenta para não disparar num teste |
 | D-15 | Falha de nó vira **resultado**, não exceção (1.19.0) | quem chama precisa fechar o run faturado e mostrar o rastro até o nó que falhou |
 | D-16 | `sql_allowlist` **fail-closed** (1.17.0) | SQL que o `sqlglot` não consegue ler é recusado — "não sei, então não", como D-04 |
+| D-17 | Cron do job é o **padrão** (o do croniter do AdminCenter), convertido para o APScheduler com o dia da semana em **nomes** (1.20.1) | quem mostra o próximo horário (AdminCenter) e quem dispara (lib) precisam ler a mesma expressão do mesmo jeito; com nomes não há numeração para divergir |
+| D-18 | Entrada opcional **declarada na ferramenta**, não descoberta pela validação (1.20.0) | quem sabe se a função tem padrão é a ferramenta; o Forge mantinha uma lista paralela (`OPCIONAIS`) que podia divergir do código |
 
 ---
 
@@ -328,6 +351,9 @@ descreve a trilha completa, proposta):
   de role propaga em até 60 s **por réplica**; conexão invalidada idem.
 - **`JobRunner` sem eleição de líder** — N réplicas disparam o mesmo cron.
   Contorno operacional: scheduler com `replicas: 1`.
+- **Horário perdido não é refeito** — o APScheduler local não recupera disparo
+  de quando o processo estava fora (ou de antes de uma correção, como os de
+  05/10/2026).
 - **Distribuição por `git+…@main` sem pin** — não há barreira que impeça um
   produto de subir com uma versão antiga da lib. O sintoma é sempre indireto
   (falta um símbolo, um campo não viaja); confira `automaxia_utils.__version__`

@@ -139,11 +139,19 @@ def _dia_da_semana(campo: str) -> str:
             "-" in base and all(p.isdigit() for p in base.split("-")))
         if not numerico:
             return tok                                   # nomes (mon-fri): o APScheduler entende
-        if passo:                                        # passo em nomes o APScheduler ignora: lista explicita
-            ini, fim = (0, 6) if base == "*" else (
-                (int(base), 6) if base.isdigit() else tuple(int(p) for p in base.split("-")))
-            return ",".join(_DIAS[d % 7] for d in range(ini, fim + 1, int(passo or 1)))
-        return "-".join(_DIAS[int(p)] if int(p) <= 7 else p for p in base.split("-"))
+        # SEMPRE lista explicita, nunca intervalo de nomes: para o APScheduler a semana vai de
+        # mon a sun, entao `0-2` viraria `sun-tue` e ele recusa (LIB-44); e passo em nomes ele ignora.
+        if base == "*":
+            ini, fim = 0, 6
+        elif base.isdigit():
+            ini = fim = int(base)
+            if passo:
+                fim = 7                                  # `3/2` = 3 a 7 de 2 em 2 (7 tambem e domingo)
+        else:
+            ini, fim = (int(p) for p in base.split("-"))
+        if ini > 7 or fim > 7 or ini > fim:
+            return tok                                   # fora do padrao: o APScheduler acusa como antes
+        return ",".join(dict.fromkeys(_DIAS[d] for d in range(ini, fim + 1, int(passo or 1))))
 
     return ",".join(um(t) for t in campo.split(","))
 

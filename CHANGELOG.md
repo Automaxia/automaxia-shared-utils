@@ -8,6 +8,22 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.20.2] — 2026-10-05
+
+Responsável técnico: Wesley Romualdo da Silva
+
+### Corrigido
+
+- **Intervalo de dia da semana que começa no domingo** (`LIB-44`): na 1.20.1, `0-2` virava
+  `sun-tue`, que o APScheduler recusa (na numeração dele domingo é o último dia) — o job ficava
+  fora do agendador. Agora o dia da semana numérico vira sempre **lista explícita** de nomes
+  (`1-5` → `mon,tue,wed,thu,fri`, `0-2` → `sun,mon,tue`, `3/2` → `wed,fri,sun`).
+
+### Adicionado
+
+- `tests/test_gatilho_cron.py`: 19 crons comparados com o croniter (o motor do AdminCenter),
+  10 disparos cada, e "dias úteis não rodam no sábado".
+
 ## [1.20.1] — 2026-10-05
 
 Responsável técnico: Wesley Romualdo da Silva

@@ -6,21 +6,23 @@
 > lado servidor destes contratos vive no
 > [`admincenter-api`](../../admincenter-api/docs/SPEC.md).
 
-**Versão da lib:** **1.20.1** (`setup.py:version`).
+**Versão da lib:** **1.20.2** (`setup.py:version`).
 **Aderente ao `admincenter-api` até a migration `0061`** — `0044`
 (`execution_steps`), `0053` (`allowed_tables`), `0054` (métricas da conexão) e
 `0061` (produtos derivados: `product_id` do job, `incluir_filhos`, escrita em
 produto filho com a chave do pai). Com AdminCenter anterior a cada uma, o campo
 correspondente chega vazio ou a escrita é recusada no envelope.
-Última revisão: **2026-10-05** · **1.20.0** (entrada opcional em ferramenta,
-`LIB-40`), **publicada** no mesmo dia (commit `8cdf25c`, tag `v1.20.0`) e conferida no pod
-do Forge. Antes, a
+Última revisão: **2026-10-05** · **1.20.2** (intervalo de cron que começa no domingo,
+`LIB-44`, com teste contra o croniter); antes, no mesmo dia, a **1.20.1** (dia da semana do
+cron no `JobRunner`, `LIB-43`) **publicada** no mesmo dia (commit `e7efd42`, tag `v1.20.1`) e no pod do Forge
+(imagem `bfc6616`); antes, no mesmo dia, a **1.20.0** (entrada opcional em ferramenta,
+`LIB-40`; commit `8cdf25c`, tag `v1.20.0`). Antes, a
 1.19.0 publicada em 25/09/2026 (commit `2d3a4bf`, tag `v1.19.0`).
 
 > ✅ Desde a 1.17.0 toda versão é publicada no dia: 1.17.0 em 21/09 (`dc30e6c`,
 > depois de seis dias só no monorepo, com o CI do `talk-api` e do `vision-api`
-> falhando em todo push — `LIB-07`), 1.18.0 em 21/09 (`c3001a6`) e 1.19.0 em
-> 25/09 (`2d3a4bf`).
+> falhando em todo push — `LIB-07`), 1.18.0 em 21/09 (`c3001a6`), 1.19.0 em
+> 25/09 (`2d3a4bf`), 1.20.0 e 1.20.1 em 05/10 (`8cdf25c`, `e7efd42`).
 >
 > Histórico: a 1.15.1 foi publicada em 08/09/2026 (tag `v1.15.1`, `e3c847f`). Antes disso a 1.15.1 existia só no
 > monorepo e **nenhum pod tinha a correção do envelope**, que é justamente a que
@@ -55,8 +57,8 @@ faturamento.
 | **Cofre de conexões** — resolver credencial de cliente em runtime | `ConnectionResolver`, `ResolvedConnection` (+ `resolve_connection`/`get_db_*` no serviço) |
 | **Serviço do control plane** — logs, secrets, variáveis, prompts, tokens | `AdminCenterService`, `AdminCenterConfig`, `get_admin_center_service`, `AdminCenterContext`, `track_execution` |
 | **Produto em escopo** (1.19.0) — gravar telemetria e resolver IA em nome de um produto derivado | `AdminCenterService.product_scope`, `product_id=` em `log_process`/`log_step`/`agent_step`/`track_token_usage` |
-| **Jobs** — cron local + webhook/WS do painel, com cancelamento cooperativo; agenda dos produtos derivados (1.19.0) | `JobRunner`, `JobCancelled`, `JobRunner(produtos_filhos=True)` + `register_derivados` |
-| **Fluxos de agentes** (1.19.0) — interpretar um fluxo `formato: 1` com as ferramentas do produto | `FlowRunner`, `RegistroDeFerramentas`, `Ferramenta`, `ContextoFluxo`, `PedidoLLM`, `RespostaLLM`, `ResultadoFluxo`, `validar_fluxo`, `FluxoInvalido`, `IaNaoConfigurada`, `LimiteExcedido` |
+| **Jobs** — cron local + webhook/WS do painel, com cancelamento cooperativo; agenda dos produtos derivados (1.19.0); cron no padrão, como o croniter do AdminCenter (1.20.1) | `JobRunner`, `JobCancelled`, `JobRunner(produtos_filhos=True)` + `register_derivados` |
+| **Fluxos de agentes** (1.19.0) — interpretar um fluxo `formato: 1` com as ferramentas do produto; entrada opcional em ferramenta (1.20.0) | `FlowRunner`, `RegistroDeFerramentas`, `Ferramenta`, `ContextoFluxo`, `PedidoLLM`, `RespostaLLM`, `ResultadoFluxo`, `validar_fluxo`, `FluxoInvalido`, `IaNaoConfigurada`, `LimiteExcedido` |
 | **Allowlist de SQL** (1.17.0) — recusar SQL que lê tabela fora da lista da conexão | `automaxia_utils.sql_allowlist`: `verificar_sql`, `tabelas_referenciadas`, `filtrar_tabelas`, `liberada`, `TabelaNaoLiberada` |
 | **Token tracking** — contagem e custo multi-provider | `track_api_response`, `track_openai_call`, `count_tokens_smart`, `HybridTokenCounter`, `LangChainTokenCallback`, … |
 | **Migrations** — `alembic upgrade` com retry no lifespan | `run_migrations` |
@@ -80,7 +82,7 @@ são **fail-closed** desde a 1.10.0 — ver §9.4.
 | RF-06 | Ler variáveis de ambiente, secrets e prompts do AdminCenter |
 | RF-07 | Enviar logs (aplicação/execução/processo) em lote assíncrono |
 | RF-08 | Contabilizar tokens e custo por produto, agente e prompt |
-| RF-09 | Executar jobs agendados pelo painel (cron local, webhook HMAC, WebSocket) |
+| RF-09 | Executar jobs agendados pelo painel (cron local, webhook HMAC, WebSocket), disparando nos **mesmos** horários que o AdminCenter mostra no `next_run_at` — cron padrão de 5 campos, 0/7 = domingo (1.20.1) |
 | RF-10 | Aplicar migrations do produto no startup com retry tolerante a banco indisponível |
 | RF-11 | Recusar, antes do banco, SQL que lê objeto fora da `allowed_tables` da conexão (1.17.0) |
 | RF-12 | Gravar telemetria e resolver agente/prompt/modelo em nome de um produto derivado, com a chave do pai (1.19.0) |
@@ -401,6 +403,15 @@ runner.raise_if_cancelled()              # em loops longos
   recebe o `_JobConfig` e roda dentro de `product_scope(job.product_id)`. O
   "rodar agora" do painel chega a filho por `force_run_at` — por isso
   `with_polling=True`.
+- **Cron** (1.20.1, `LIB-43`): a expressão é o cron **padrão** de 5 campos
+  (0/7 = domingo, 1 = segunda) — a mesma que o AdminCenter lê com o croniter
+  para o `next_run_at`. `gatilho_cron(expressao, fuso)` (em
+  `automaxia_utils.admin_center.jobs`, fora do `__init__`) monta o `CronTrigger`
+  com o dia da semana em **lista explícita de nomes** (`1-5` →
+  `mon,tue,wed,thu,fri`, `0-2` → `sun,mon,tue`, `*/2` → `sun,tue,thu,sat`; 1.20.2), porque o APScheduler 3.x numera a
+  semana com 0 = segunda e o `from_crontab` não converte. Até a 1.20.0, `1-5`
+  disparava de terça a sábado. Expressão que não tem 5 campos segue pelo
+  `from_crontab`. Horário perdido não é recuperado.
 
 ---
 
@@ -412,8 +423,9 @@ ecossistema §5.11.2). Primeiro consumidor: o Forge.
 ```python
 registro = RegistroDeFerramentas()
 
-@registro.ferramenta('enviar_email', entradas=['assunto', 'corpo'],
-                     saida=['enviado'], efeito='email')
+@registro.ferramenta('enviar_email', entradas=['assunto', 'corpo', 'anexo'],
+                     saida=['enviado'], efeito='email',
+                     opcionais=['anexo'])                 # 1.20.0: pode ficar sem origem
 def enviar_email(ctx: ContextoFluxo, entradas: dict, config: dict) -> dict:
     ...
 
@@ -436,6 +448,7 @@ r.ok, r.saida, r.falha, r.no_falha, r.traco, r.tokens_entrada, r.correlation_id
 | RN-LIB-FL-04 | Ferramenta que sumiu do registro ou mudou de `versao` falha o nó ("fluxo quebrado") — nunca é pulada. |
 | RN-LIB-FL-05 | Falha de nó não levanta: vai em `ResultadoFluxo.falha`/`no_falha` e numa linha `tipo='erro'` do `traco`. |
 | RN-LIB-FL-06 | Saída `json`/`escolha` fora do formato ganha **uma** nova tentativa com a correção; a segunda falha o nó. |
+| RN-LIB-FL-07 | Toda entrada declarada é obrigatória para o `validar_fluxo` ("Entrada … sem origem"), **menos** as de `opcionais` (1.20.0). Opcional fora de `entradas` → `ValueError` no registro. O runner entrega à função só o que o nó mapeou; `spec()` leva `opcionais` (ordenada) só quando há. |
 
 **Limites** (`FlowRunner(...)`): `max_nos` (padrão e teto 60 nós executados),
 `max_tokens` e `max_segundos` (opcionais, por execução), `max_voltas` 1–5 por
@@ -562,8 +575,9 @@ BIGQUERY_MAXIMUM_BYTES_BILLED=
 | v1.13.0 | `fastapi` e `python-jose` declarados como extras (CI da lib passa) |
 | v1.14.0 *(2026-08-26)* | Sincronização com a `infrabalance-shared-utils` 2.9.0: gate de produto voltou a funcionar (`ADMIN_CENTER_PRODUCT_SLUG`), auth em dev deixa de bater em produção, `ResolvedConnection` cobre `rest`/`arcgis`/`databricks` e os campos da migration 0042, `log_min_level`, desmembramento do `context` do log, guardas de `has_logging_identity()`, descoberta de `product_id`/`environment_id` por slug, `log_process(execution_id=…)`. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
 | v1.15.0 *(2026-08-31)* | **Execução observável**: `agent_step`/`execution_scope`/`log_step` gravam a linha do tempo de dentro de uma execução (`execution_steps`, migration 0044), com o modelo EFETIVO por etapa; `log_process` ganha `agent_slug`/`area_agent_slug`/`connection_id` (migration 0043) resolvendo pelo mesmo cache do token tracking; passos vão num POST só. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
-| **v1.20.1** *(atual, 2026-10-05)* | **Dia da semana do cron**: o `JobRunner` convertia `1-5` em terça–sábado (APScheduler 3.x, 0 = segunda); agora `gatilho_cron` converte para nomes (`LIB-43`). |
-| **v1.20.0** *(2026-10-05)* | **Entrada opcional em ferramenta**: `opcionais=` no `@ferramenta`, a lista no `spec()` e `validar_fluxo` sem "sem origem" nelas (`LIB-40`). Sem mudança para quem não usa. |
+| **v1.20.2** *(atual, 2026-10-05)* | **Intervalo que começa no domingo**: `0-2` virava `sun-tue` e o APScheduler recusava; o dia da semana vira sempre lista de nomes, com teste contra o croniter (`LIB-44`). |
+| **v1.20.1** *(2026-10-05, publicada no mesmo dia — `e7efd42`, tag `v1.20.1`)* | **Dia da semana do cron**: o `JobRunner` convertia `1-5` em terça–sábado (APScheduler 3.x, 0 = segunda); agora `gatilho_cron` converte para nomes (`LIB-43`). |
+| **v1.20.0** *(2026-10-05, publicada no mesmo dia — `8cdf25c`, tag `v1.20.0`)* | **Entrada opcional em ferramenta**: `opcionais=` no `@ferramenta`, a lista no `spec()` e `validar_fluxo` sem "sem origem" nelas (`LIB-40`). Sem mudança para quem não usa. |
 | **v1.19.0** *(2026-09-25, publicada no mesmo dia — `2d3a4bf`, tag `v1.19.0`)* | **Produtos derivados e fluxos**: `product_scope`, `product_id` explícito na telemetria, `JobRunner(produtos_filhos=True)` + `register_derivados`, `automaxia_utils.flows` (`FlowRunner`, ferramentas, `validar_fluxo`), `tools`/`flow_entrypoints` no manifest. Exige admincenter-api com a migration `0061` para gravar em produto filho. |
 | **v1.18.0** *(2026-09-21, publicada no mesmo dia — `c3001a6`)* | **Camada semântica**: `ResolvedConnection.metrics` — as métricas de negócio ATIVAS da conexão (migration `0054` do AdminCenter). Lista vazia com AdminCenter anterior. |
 | **v1.17.0** *(2026-09-17, publicada 21/09)* | **Allowlist de tabelas por conexão**: `sql_allowlist` (`tabelas_referenciadas`, `verificar_sql`, `DIALETOS_SQLGLOT`, via sqlglot) e `allowed_tables` no `ResolvedConnection`. Os satélites recusam, ANTES do banco, SQL que lê objeto fora da lista (migration `0053` do AdminCenter). |
@@ -593,11 +607,10 @@ Sem PyPI. A partir da 1.14.0 o histórico canônico é o
   rotação é big-bang (sem `kid`/JWKS).
 - **Cobertura de teste parcial** — o ciclo do `JobRunner` e o broker de conexões
   não têm suíte própria (há só `test_jobrunner_filhos.py`, do modo
-  `produtos_filhos`, e `test_connections_bigquery.py`).
+  `produtos_filhos`, `test_connections_bigquery.py` e, desde a 1.20.2,
+  `test_gatilho_cron.py` — o cron do `JobRunner` contra o croniter).
 - **`FlowRunner` síncrono** (ramos em threads) — em rota FastAPI, use
   `run_in_threadpool` (`LIB-39`).
-- **Entrada de ferramenta é sempre obrigatória** para o `validar_fluxo`
-  (`LIB-40`); o Forge contorna na validação dele.
 - **Instrução do nó no fim do `system`** perde para o prompt do agente (medido
   9/15 no Forge, `LIB-41`); o Forge remonta a mensagem no `chamar_llm` dele.
 - **Corte de entrada sem aviso estruturado** — `max_chars_entrada` corta em

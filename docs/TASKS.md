@@ -5,16 +5,17 @@
 > **Convenção de ID:** itens abertos usam `LIB-##`. Itens concluídos ficam como
 > checklist histórica, sem ID.
 
-Última revisão: **2026-09-28** · lib **1.19.0 publicada** (`2d3a4bf`, tag
-`v1.19.0`, 25/09/2026). Nenhuma mudança de código na lib depois disso; os
-achados do Forge com o motor de fluxos estão em `LIB-39`…`LIB-42` (seção 1.19.0,
-no fim).
+Última revisão: **2026-10-05** · lib **1.20.2** (a 1.20.1 em `e7efd42` e a 1.20.0 em
+`8cdf25c`, no mesmo dia). Fechados `LIB-40` (entrada opcional), `LIB-43` (dia da semana do
+cron) e `LIB-44` (intervalo que começa no domingo + teste do `gatilho_cron`).
+Seções 1.19.0 e 1.20.x no fim. Antes, 28/09/2026 (1.19.0, `2d3a4bf`).
 
 > O backlog abaixo foi escrito na 1.12.0 e continua válido — o que entrou depois
-> (1.13.0 → 1.19.0) está no [`../CHANGELOG.md`](../CHANGELOG.md), que é o
+> (1.13.0 → 1.20.1) está no [`../CHANGELOG.md`](../CHANGELOG.md), que é o
 > histórico canônico desde a 1.14.0.
 >
-> Desde a 1.17.0 toda versão é publicada no dia (`LIB-07`, `LIB-33`, `LIB-38`).
+> Desde a 1.17.0 toda versão é publicada no dia (`LIB-07`, `LIB-33`, `LIB-38`;
+> 1.20.0 e 1.20.1 em 05/10/2026).
 > O item que resta na frente continua o **`LIB-03`** (pin + `no-cache-filters`):
 > publicar põe a versão ao alcance do build, mas não a põe no pod enquanto a
 > camada do pip continuar congelada — o `deploy.bat` já usa
@@ -191,8 +192,12 @@ no fim).
 - [ ] **LIB-04** — Documentar processo de release (bump em `setup.py`
       **e em `automaxia_utils/__init__.py`** — os dois divergiram até 08/09/2026 —,
       tag, push, atualizar consumidores).
-- [ ] **LIB-05** — Trocar o **PAT em texto puro** no remote do repositório por
-      credential helper e revogar a chave.
+- [~] **LIB-05 / `ST-10`** — Trocar o **PAT em texto puro** no remote do repositório por
+      credential helper e revogar a chave. Credential helper por caminho desde 08/09/2026
+      (monorepo e publicação sem PAT na URL). **Falta revogar**: o PAT ainda está em texto
+      puro no `.git/config` de um clone antigo fora do monorepo
+      (`admincenter_bk_08_2026/automaxia-shared-utils`, achado em 05/10/2026) — ação do
+      dono da conta; detalhe no `ST-10` do backlog transversal.
 - [x] Script `reinstall_in_consumers.ps1` (PowerShell) na raiz do repo:
       varre uma raiz (`D:\Automaxia\clientes` por default), encontra todas as
       venvs com `automaxia_utils` instalado e reinstala `--force-reinstall
@@ -359,16 +364,6 @@ no fim).
       runner montar assim (ou mandar `PedidoLLM.instrucao` em campo próprio) —
       vale para todo produto que adotar fluxos. Ao mudar, tirar a remontagem
       do Forge (`execucao/llm.py`, `mensagens()`).
-- [x] **LIB-43** — (05/10/2026, **1.20.1**) **Dia da semana do cron no JobRunner.** O
-      `CronTrigger.from_crontab` do APScheduler 3.x lê o dia da semana com 0 = segunda: `1-5`
-      virava terça a sábado (agendas do Forge rodaram no sábado e pularam a segunda em
-      produção). `gatilho_cron` converte para nomes; conferido contra o croniter em 10 crons
-      (intervalo, lista, domingo 0/7, passo, nomes, sem dia).
-- [x] **LIB-40** — (05/10/2026, **1.20.0**) Entrada **opcional** em ferramenta:
-      `opcionais=` no `@ferramenta` (precisa estar em `entradas`, senão
-      `ValueError` no registro), `spec()` com a lista (só quando há) e
-      `validar_fluxo` sem "sem origem" nelas. O runner já só entregava o que foi
-      mapeado. O Forge largou o contorno (`OPCIONAIS`) no mesmo dia (`FG-27`).
 - [ ] **LIB-39** — `FlowRunner` assíncrono (hoje síncrono, com ramos em threads).
       O Forge roda no `forge-worker`; na tela, via `run_in_threadpool`.
 - [ ] **LIB-42** — **Aviso de corte nativo.** O `_texto_entradas` corta cada
@@ -380,3 +375,23 @@ no fim).
       corte (no registro do nó e no `detail` do `agent_step`) — é o
       `amostra_para_llm`/"grava aviso" do SDD do ecossistema §5.11.5, que a
       1.19.0 não implementou. Ao fazer, tirar a reconstrução do Forge.
+
+## 1.20.x — entrada opcional e cron (2026-10-05)
+
+- [x] **LIB-40** — (05/10/2026, **1.20.0**) Entrada **opcional** em ferramenta:
+      `opcionais=` no `@ferramenta` (precisa estar em `entradas`, senão
+      `ValueError` no registro), `spec()` com a lista (só quando há) e
+      `validar_fluxo` sem "sem origem" nelas. O runner já só entregava o que foi
+      mapeado. O Forge largou o contorno (`OPCIONAIS`) no mesmo dia (`FG-27`).
+- [x] **LIB-43 / `FG-117`** — (05/10/2026, **1.20.1**) **Dia da semana do cron no JobRunner.** O
+      `CronTrigger.from_crontab` do APScheduler 3.x lê o dia da semana com 0 = segunda: `1-5`
+      virava terça a sábado (agendas do Forge rodaram no sábado 03/10 e pularam a segunda
+      05/10 em produção). `gatilho_cron` converte para nomes; conferido à mão contra o
+      croniter em 10 crons (intervalo, lista, domingo 0/7, passo, nomes, sem dia).
+      Publicada (`e7efd42`, tag `v1.20.1`) e no pod do Forge (imagem `bfc6616`).
+- [x] **LIB-44** — (05/10/2026, **1.20.2**) **Intervalo de dia da semana que começa no
+      domingo.** Na 1.20.1, `0-2` virava `sun-tue` e o APScheduler recusava ("The minimum
+      value in a range must not be higher than the maximum" — para ele domingo é o último
+      dia): o job ficava fora do agendador. Agora o dia da semana numérico vira sempre
+      lista explícita de nomes. `tests/test_gatilho_cron.py`: 19 crons contra o croniter
+      (10 disparos cada), incluindo `0-2`, `5-7`, `0-7`, `3/2` e `1/3`.

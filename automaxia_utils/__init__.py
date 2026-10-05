@@ -2,7 +2,7 @@
 Automaxia Utils - Pacote compartilhado
 """
 
-__version__ = "1.20.1"
+__version__ = "1.20.2"
 __author__ = "Automaxia"
 
 # Importar de admin_center
