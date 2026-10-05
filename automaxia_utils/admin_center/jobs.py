@@ -119,6 +119,47 @@ def current_run_context() -> Optional["_RunContext"]:
     return getattr(_module_ctx_local, 'ctx', None)
 
 
+_DIAS = ("sun", "mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _dia_da_semana(campo: str) -> str:
+    """Dia da semana do cron PADRAO (0/7 = domingo, 1 = segunda) para nomes (`mon-fri`).
+
+    O APScheduler 3.x numera a semana com 0 = SEGUNDA e o `from_crontab` nao converte:
+    `1-5` virava terca a sabado (05/10/2026 — as agendas do Forge rodaram no sabado e
+    pularam a segunda). Com nomes nao ha ambiguidade. `*`, `?` e nomes passam iguais;
+    passo (`1-5/2`, `*/2`) mantem o passo.
+    """
+    if campo in ("*", "?"):
+        return campo
+
+    def um(tok: str) -> str:
+        base, _, passo = tok.partition("/")
+        numerico = base == "*" or base.isdigit() or (
+            "-" in base and all(p.isdigit() for p in base.split("-")))
+        if not numerico:
+            return tok                                   # nomes (mon-fri): o APScheduler entende
+        if passo:                                        # passo em nomes o APScheduler ignora: lista explicita
+            ini, fim = (0, 6) if base == "*" else (
+                (int(base), 6) if base.isdigit() else tuple(int(p) for p in base.split("-")))
+            return ",".join(_DIAS[d % 7] for d in range(ini, fim + 1, int(passo or 1)))
+        return "-".join(_DIAS[int(p)] if int(p) <= 7 else p for p in base.split("-"))
+
+    return ",".join(um(t) for t in campo.split(","))
+
+
+def gatilho_cron(expressao: str, fuso: Optional[str] = None):
+    """`CronTrigger` a partir de um cron de 5 campos no padrao (o mesmo do croniter do
+    AdminCenter, que calcula o `next_run_at`), com o dia da semana convertido."""
+    from apscheduler.triggers.cron import CronTrigger
+    partes = (expressao or "").split()
+    if len(partes) != 5:
+        return CronTrigger.from_crontab(expressao, timezone=fuso)
+    minuto, hora, dia, mes, semana = partes
+    return CronTrigger(minute=minuto, hour=hora, day=dia, month=mes,
+                       day_of_week=_dia_da_semana(semana), timezone=fuso)
+
+
 class JobCancelled(Exception):
     """Levantado por raise_if_cancelled() quando o operador clicou em "Parar".
 
@@ -295,7 +336,7 @@ class JobRunner:
                 logger.debug("JobRunner: %s sem cron — manual-only", cfg.slug)
                 continue
             try:
-                trigger = CronTrigger.from_crontab(cfg.cron_expression, timezone=cfg.timezone)
+                trigger = gatilho_cron(cfg.cron_expression, cfg.timezone)
                 self._scheduler.add_job(
                     func=self._wrap_for_scheduler(cfg),
                     trigger=trigger,

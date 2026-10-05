@@ -8,6 +8,20 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.20.1] — 2026-10-05
+
+Responsável técnico: Wesley Romualdo da Silva
+
+### Corrigido
+
+- **JobRunner disparava no dia da semana errado** (`LIB-43`). O APScheduler 3.x numera a
+  semana com 0 = segunda e o `CronTrigger.from_crontab` não converte o cron padrão: `1-5`
+  (segunda a sexta) rodava de **terça a sábado**. Visto em produção em 05/10/2026: as
+  agendas do Forge rodaram no sábado 03/10 e pularam a segunda — e o `next_run_at` do
+  AdminCenter (croniter, padrão) dizia segunda. Agora `gatilho_cron` monta o trigger com o
+  dia da semana em nomes (`mon-fri`; passo vira lista explícita), conferido contra o
+  croniter. Cron sem dia da semana (`* * *`) não muda.
+
 ## [1.20.0] — 2026-10-05
 
 Responsável técnico: Wesley Romualdo da Silva

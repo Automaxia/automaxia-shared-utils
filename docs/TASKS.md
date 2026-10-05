@@ -359,6 +359,11 @@ no fim).
       runner montar assim (ou mandar `PedidoLLM.instrucao` em campo próprio) —
       vale para todo produto que adotar fluxos. Ao mudar, tirar a remontagem
       do Forge (`execucao/llm.py`, `mensagens()`).
+- [x] **LIB-43** — (05/10/2026, **1.20.1**) **Dia da semana do cron no JobRunner.** O
+      `CronTrigger.from_crontab` do APScheduler 3.x lê o dia da semana com 0 = segunda: `1-5`
+      virava terça a sábado (agendas do Forge rodaram no sábado e pularam a segunda em
+      produção). `gatilho_cron` converte para nomes; conferido contra o croniter em 10 crons
+      (intervalo, lista, domingo 0/7, passo, nomes, sem dia).
 - [x] **LIB-40** — (05/10/2026, **1.20.0**) Entrada **opcional** em ferramenta:
       `opcionais=` no `@ferramenta` (precisa estar em `entradas`, senão
       `ValueError` no registro), `spec()` com a lista (só quando há) e

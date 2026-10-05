@@ -6,14 +6,15 @@
 > lado servidor destes contratos vive no
 > [`admincenter-api`](../../admincenter-api/docs/SPEC.md).
 
-**Versão da lib:** **1.20.0** (`setup.py:version`).
+**Versão da lib:** **1.20.1** (`setup.py:version`).
 **Aderente ao `admincenter-api` até a migration `0061`** — `0044`
 (`execution_steps`), `0053` (`allowed_tables`), `0054` (métricas da conexão) e
 `0061` (produtos derivados: `product_id` do job, `incluir_filhos`, escrita em
 produto filho com a chave do pai). Com AdminCenter anterior a cada uma, o campo
 correspondente chega vazio ou a escrita é recusada no envelope.
 Última revisão: **2026-10-05** · **1.20.0** (entrada opcional em ferramenta,
-`LIB-40`) — publicar no repositório da lib no mesmo dia do commit. Antes, a
+`LIB-40`), **publicada** no mesmo dia (commit `8cdf25c`, tag `v1.20.0`) e conferida no pod
+do Forge. Antes, a
 1.19.0 publicada em 25/09/2026 (commit `2d3a4bf`, tag `v1.19.0`).
 
 > ✅ Desde a 1.17.0 toda versão é publicada no dia: 1.17.0 em 21/09 (`dc30e6c`,
@@ -561,7 +562,8 @@ BIGQUERY_MAXIMUM_BYTES_BILLED=
 | v1.13.0 | `fastapi` e `python-jose` declarados como extras (CI da lib passa) |
 | v1.14.0 *(2026-08-26)* | Sincronização com a `infrabalance-shared-utils` 2.9.0: gate de produto voltou a funcionar (`ADMIN_CENTER_PRODUCT_SLUG`), auth em dev deixa de bater em produção, `ResolvedConnection` cobre `rest`/`arcgis`/`databricks` e os campos da migration 0042, `log_min_level`, desmembramento do `context` do log, guardas de `has_logging_identity()`, descoberta de `product_id`/`environment_id` por slug, `log_process(execution_id=…)`. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
 | v1.15.0 *(2026-08-31)* | **Execução observável**: `agent_step`/`execution_scope`/`log_step` gravam a linha do tempo de dentro de uma execução (`execution_steps`, migration 0044), com o modelo EFETIVO por etapa; `log_process` ganha `agent_slug`/`area_agent_slug`/`connection_id` (migration 0043) resolvendo pelo mesmo cache do token tracking; passos vão num POST só. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
-| **v1.20.0** *(atual, 2026-10-05)* | **Entrada opcional em ferramenta**: `opcionais=` no `@ferramenta`, a lista no `spec()` e `validar_fluxo` sem "sem origem" nelas (`LIB-40`). Sem mudança para quem não usa. |
+| **v1.20.1** *(atual, 2026-10-05)* | **Dia da semana do cron**: o `JobRunner` convertia `1-5` em terça–sábado (APScheduler 3.x, 0 = segunda); agora `gatilho_cron` converte para nomes (`LIB-43`). |
+| **v1.20.0** *(2026-10-05)* | **Entrada opcional em ferramenta**: `opcionais=` no `@ferramenta`, a lista no `spec()` e `validar_fluxo` sem "sem origem" nelas (`LIB-40`). Sem mudança para quem não usa. |
 | **v1.19.0** *(2026-09-25, publicada no mesmo dia — `2d3a4bf`, tag `v1.19.0`)* | **Produtos derivados e fluxos**: `product_scope`, `product_id` explícito na telemetria, `JobRunner(produtos_filhos=True)` + `register_derivados`, `automaxia_utils.flows` (`FlowRunner`, ferramentas, `validar_fluxo`), `tools`/`flow_entrypoints` no manifest. Exige admincenter-api com a migration `0061` para gravar em produto filho. |
 | **v1.18.0** *(2026-09-21, publicada no mesmo dia — `c3001a6`)* | **Camada semântica**: `ResolvedConnection.metrics` — as métricas de negócio ATIVAS da conexão (migration `0054` do AdminCenter). Lista vazia com AdminCenter anterior. |
 | **v1.17.0** *(2026-09-17, publicada 21/09)* | **Allowlist de tabelas por conexão**: `sql_allowlist` (`tabelas_referenciadas`, `verificar_sql`, `DIALETOS_SQLGLOT`, via sqlglot) e `allowed_tables` no `ResolvedConnection`. Os satélites recusam, ANTES do banco, SQL que lê objeto fora da lista (migration `0053` do AdminCenter). |
