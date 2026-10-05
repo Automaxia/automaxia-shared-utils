@@ -5,16 +5,21 @@
 > **Convenção de ID:** itens abertos usam `LIB-##`. Itens concluídos ficam como
 > checklist histórica, sem ID.
 
-Última revisão: **2026-09-21** · lib **1.18.0**.
+Última revisão: **2026-09-28** · lib **1.19.0 publicada** (`2d3a4bf`, tag
+`v1.19.0`, 25/09/2026). Nenhuma mudança de código na lib depois disso; os
+achados do Forge com o motor de fluxos estão em `LIB-39`…`LIB-42` (seção 1.19.0,
+no fim).
 
 > O backlog abaixo foi escrito na 1.12.0 e continua válido — o que entrou depois
-> (1.13.0 → 1.15.1) está no [`../CHANGELOG.md`](../CHANGELOG.md), que é o
+> (1.13.0 → 1.19.0) está no [`../CHANGELOG.md`](../CHANGELOG.md), que é o
 > histórico canônico desde a 1.14.0.
 >
-> **A 1.15.1 foi publicada em 08/09/2026** (`e3c847f`, tag `v1.15.1`), fechando o
-> `LIB-06`. Com ela fora, o item que resta na frente é o **`LIB-03`**
-> (pin + `no-cache-filters`): publicar põe a correção ao alcance do build, mas
-> não a põe no pod enquanto a camada do pip continuar congelada.
+> Desde a 1.17.0 toda versão é publicada no dia (`LIB-07`, `LIB-33`, `LIB-38`).
+> O item que resta na frente continua o **`LIB-03`** (pin + `no-cache-filters`):
+> publicar põe a versão ao alcance do build, mas não a põe no pod enquanto a
+> camada do pip continuar congelada — o `deploy.bat` já usa
+> `--no-cache-filter deps,runtime` e confere a versão na imagem (26/09/2026), o
+> que falta é o pin.
 
 ---
 
@@ -170,15 +175,19 @@
         comentários/exemplos (`ST-32`) e os docs no padrão MAIÚSCULO
         (`docs/spec.md` → `docs/SPEC.md`, idem TASKS).
 - [ ] **LIB-02** — Tags Git para as versões **intermediárias**. Conferido no
-      remoto em 08/09/2026: existem `v1.8.0`, `v1.12.0` e agora `v1.15.1` —
-      1.9/1.10/1.11 e a linha 1.13–1.15.0 continuam sem tag. Já dá para pinar a
+      remoto em 08/09/2026: existem `v1.8.0`, `v1.12.0` e `v1.15.1`; depois
+      vieram `v1.17.0`, `v1.18.0` e `v1.19.0` (a 1.16.0 foi junto com a 1.17.0,
+      sem tag). 1.9/1.10/1.11 e a linha 1.13–1.15.0 continuam sem tag. Já dá para pinar a
       versão corrente; o que falta é poder pinar as antigas.
 - [ ] **LIB-03** — **Pin de versão nos consumidores.** Todos instalam
       `git+…@main` sem pin (conferido em 08/09/2026 nos `requirements.txt` de
       `harvest-api`, `office-api` e irmãos); com `cache-from: type=gha` a lib
       congela na versão do dia em que a camada nasceu. Combinar `no-cache-filters`
-      no estágio de deps + `@v1.15.1` no `requirements.txt`. **Destravado em
-      08/09/2026** pelo `LIB-06`: a tag existe, então agora é só fazer.
+      no estágio de deps + `@v1.19.0` (a tag corrente) no `requirements.txt`.
+      **Destravado em 08/09/2026** pelo `LIB-06`: a tag existe, então agora é só
+      fazer. Metade feita em 26/09/2026 pelo `deploy.bat` (filtro
+      `deps,runtime` + versão da lib conferida na imagem contra a do monorepo);
+      o pin continua pendente.
 - [ ] **LIB-04** — Documentar processo de release (bump em `setup.py`
       **e em `automaxia_utils/__init__.py`** — os dois divergiram até 08/09/2026 —,
       tag, push, atualizar consumidores).
@@ -325,7 +334,7 @@
   está atrás de NAT/proxy intermitente, eventos podem ser perdidos
   (mitigado pelo `force_run_at` no AdminCenter).
 
-## 1.19.0 — produtos derivados e fluxos (2026-09-25)
+## 1.19.0 — produtos derivados e fluxos (2026-09-25; revisto em 2026-09-28)
 
 - [x] **LIB-34** — `product_scope` + `product_id` explícito na telemetria (SDD
       §5.12). Testes em `tests/test_escopo_produto.py`.
@@ -334,9 +343,35 @@
 - [x] **LIB-36** — `automaxia_utils.flows` (`FlowRunner`, ferramentas,
       validação). Testes em `tests/test_flow_runner.py`.
 - [x] **LIB-37** — Lote de passos por produto e `execution_scope` em ContextVar.
-- [ ] **LIB-38** — **Publicar a 1.19.0** no repositório da lib no mesmo dia do
+- [x] **LIB-38** — **Publicada em 25/09/2026** (commit `2d3a4bf`, tag `v1.19.0`;
+      `pip install …@main` confirmado trazendo a 1.19.0). **Conferida no pod**
+      em 28/09/2026: `automaxia_utils.__version__ == "1.19.0"` no `forge-back`
+      (produção, imagem `2a63184`). Texto original: publicar a 1.19.0 no repositório da lib no mesmo dia do
       commit no monorepo, e conferir `automaxia_utils.__version__` **no pod** do
       Forge (§2.1 do SDD do ecossistema: lib só no monorepo é código que nenhum
       consumidor tem).
+- [ ] **LIB-41** — **Instrução do nó onde o modelo obedece** (`FG-61` do Forge,
+      28/09/2026). Hoje `_rodar_agente` põe a instrução no FIM do `system`
+      (`Instrucao desta etapa:`), e o prompt do agente vence: medido 9/15 com
+      o prompt real do Redator. Com a instrução no system com precedência
+      explícita **e** repetida no fim da mensagem do usuário, 15/15. O Forge
+      já remonta no `chamar_llm` dele reconhecendo o marcador; o certo é o
+      runner montar assim (ou mandar `PedidoLLM.instrucao` em campo próprio) —
+      vale para todo produto que adotar fluxos. Ao mudar, tirar a remontagem
+      do Forge (`execucao/llm.py`, `mensagens()`).
+- [x] **LIB-40** — (05/10/2026, **1.20.0**) Entrada **opcional** em ferramenta:
+      `opcionais=` no `@ferramenta` (precisa estar em `entradas`, senão
+      `ValueError` no registro), `spec()` com a lista (só quando há) e
+      `validar_fluxo` sem "sem origem" nelas. O runner já só entregava o que foi
+      mapeado. O Forge largou o contorno (`OPCIONAIS`) no mesmo dia (`FG-27`).
 - [ ] **LIB-39** — `FlowRunner` assíncrono (hoje síncrono, com ramos em threads).
       O Forge roda no `forge-worker`; na tela, via `run_in_threadpool`.
+- [ ] **LIB-42** — **Aviso de corte nativo.** O `_texto_entradas` corta cada
+      entrada de agente em `max_chars_entrada` (12.000) só com a marca
+      `[... cortado: N caracteres]` no texto — nada no `traco` nem no passo. O
+      Forge reconstrói o aviso depois da execução comparando o rastro com
+      `runner.max_chars_entrada` (`forge-api/src/execucao/executor.py`,
+      `avisos_de_corte`; `FG-R40`/`FG-56`). O certo é o runner registrar o
+      corte (no registro do nó e no `detail` do `agent_step`) — é o
+      `amostra_para_llm`/"grava aviso" do SDD do ecossistema §5.11.5, que a
+      1.19.0 não implementou. Ao fazer, tirar a reconstrução do Forge.

@@ -8,6 +8,19 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.20.0] — 2026-10-05
+
+Responsável técnico: Wesley Romualdo da Silva
+
+### Adicionado
+
+- **Entrada opcional em ferramenta** (`LIB-40`): `@registro.ferramenta(..., opcionais=[...])`
+  marca entradas declaradas que podem ficar sem origem. `validar_fluxo` deixa de
+  acusar "Entrada … sem origem" nelas; `Ferramenta.spec()` leva `opcionais` (só
+  quando há); opcional fora de `entradas` levanta `ValueError` no registro. O
+  runner já só entregava à função o que foi mapeado. Nenhum consumidor precisa
+  mudar nada; o Forge é o primeiro a usar (`FG-27`).
+
 ## [1.19.0] — 2026-09-25
 
 Responsável técnico: Wesley Romualdo da Silva

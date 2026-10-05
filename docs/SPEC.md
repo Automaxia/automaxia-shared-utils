@@ -6,17 +6,20 @@
 > lado servidor destes contratos vive no
 > [`admincenter-api`](../../admincenter-api/docs/SPEC.md).
 
-**Versão da lib:** **1.19.0** (`setup.py:version`).
-**Aderente ao `admincenter-api` até a migration `0044`** — é a `execution_steps`
-que fecha o contrato consumido; as migrations posteriores (0045–0051) são de
-catálogo e não mudam o que a lib fala.
-Última revisão: **2026-09-21**.
+**Versão da lib:** **1.20.0** (`setup.py:version`).
+**Aderente ao `admincenter-api` até a migration `0061`** — `0044`
+(`execution_steps`), `0053` (`allowed_tables`), `0054` (métricas da conexão) e
+`0061` (produtos derivados: `product_id` do job, `incluir_filhos`, escrita em
+produto filho com a chave do pai). Com AdminCenter anterior a cada uma, o campo
+correspondente chega vazio ou a escrita é recusada no envelope.
+Última revisão: **2026-10-05** · **1.20.0** (entrada opcional em ferramenta,
+`LIB-40`) — publicar no repositório da lib no mesmo dia do commit. Antes, a
+1.19.0 publicada em 25/09/2026 (commit `2d3a4bf`, tag `v1.19.0`).
 
-> ✅ **A 1.17.0 está PUBLICADA** desde 21/09/2026, com a tag `v1.17.0` — commit
-> `dc30e6c` no `main` de `Automaxia/automaxia-shared-utils`, que é o que todo
-> `requirements.txt` instala por `@main`. A 1.16.0 e a 1.17.0 ficaram seis dias
-> só no monorepo, e o CI do `talk-api` e do `vision-api` — que testa contra a lib
-> publicada — falhou em todo push nesse tempo (`LIB-07`).
+> ✅ Desde a 1.17.0 toda versão é publicada no dia: 1.17.0 em 21/09 (`dc30e6c`,
+> depois de seis dias só no monorepo, com o CI do `talk-api` e do `vision-api`
+> falhando em todo push — `LIB-07`), 1.18.0 em 21/09 (`c3001a6`) e 1.19.0 em
+> 25/09 (`2d3a4bf`).
 >
 > Histórico: a 1.15.1 foi publicada em 08/09/2026 (tag `v1.15.1`, `e3c847f`). Antes disso a 1.15.1 existia só no
 > monorepo e **nenhum pod tinha a correção do envelope**, que é justamente a que
@@ -50,7 +53,10 @@ faturamento.
 | **Auto-registro** — entrar no catálogo declarando o que o produto é | `ProductManifest`, `ProductRegistrationConfig`, `register_with_platform`, `send_heartbeat`, `start_heartbeat_loop` |
 | **Cofre de conexões** — resolver credencial de cliente em runtime | `ConnectionResolver`, `ResolvedConnection` (+ `resolve_connection`/`get_db_*` no serviço) |
 | **Serviço do control plane** — logs, secrets, variáveis, prompts, tokens | `AdminCenterService`, `AdminCenterConfig`, `get_admin_center_service`, `AdminCenterContext`, `track_execution` |
-| **Jobs** — cron local + webhook/WS do painel, com cancelamento cooperativo | `JobRunner`, `JobCancelled` |
+| **Produto em escopo** (1.19.0) — gravar telemetria e resolver IA em nome de um produto derivado | `AdminCenterService.product_scope`, `product_id=` em `log_process`/`log_step`/`agent_step`/`track_token_usage` |
+| **Jobs** — cron local + webhook/WS do painel, com cancelamento cooperativo; agenda dos produtos derivados (1.19.0) | `JobRunner`, `JobCancelled`, `JobRunner(produtos_filhos=True)` + `register_derivados` |
+| **Fluxos de agentes** (1.19.0) — interpretar um fluxo `formato: 1` com as ferramentas do produto | `FlowRunner`, `RegistroDeFerramentas`, `Ferramenta`, `ContextoFluxo`, `PedidoLLM`, `RespostaLLM`, `ResultadoFluxo`, `validar_fluxo`, `FluxoInvalido`, `IaNaoConfigurada`, `LimiteExcedido` |
+| **Allowlist de SQL** (1.17.0) — recusar SQL que lê tabela fora da lista da conexão | `automaxia_utils.sql_allowlist`: `verificar_sql`, `tabelas_referenciadas`, `filtrar_tabelas`, `liberada`, `TabelaNaoLiberada` |
 | **Token tracking** — contagem e custo multi-provider | `track_api_response`, `track_openai_call`, `count_tokens_smart`, `HybridTokenCounter`, `LangChainTokenCallback`, … |
 | **Migrations** — `alembic upgrade` com retry no lifespan | `run_migrations` |
 
@@ -75,6 +81,10 @@ são **fail-closed** desde a 1.10.0 — ver §9.4.
 | RF-08 | Contabilizar tokens e custo por produto, agente e prompt |
 | RF-09 | Executar jobs agendados pelo painel (cron local, webhook HMAC, WebSocket) |
 | RF-10 | Aplicar migrations do produto no startup com retry tolerante a banco indisponível |
+| RF-11 | Recusar, antes do banco, SQL que lê objeto fora da `allowed_tables` da conexão (1.17.0) |
+| RF-12 | Gravar telemetria e resolver agente/prompt/modelo em nome de um produto derivado, com a chave do pai (1.19.0) |
+| RF-13 | Atender a agenda dos produtos derivados que o satélite hospeda (1.19.0) |
+| RF-14 | Interpretar um fluxo de agentes (`formato: 1`) com IA só do AdminCenter, ferramenta de efeito inerte em teste e cada nó como `agent_step` (1.19.0) |
 
 | # | Requisito não-funcional |
 |---|---|
@@ -93,7 +103,7 @@ automaxia_utils/
 ├── admin_center/
 │   ├── service.py          # AdminCenterService
 │   ├── jobs.py             # JobRunner (APScheduler + listener HTTP + WS)
-│   └── connections.py      # ResolvedConnection + ConnectionResolver
+│   └── connections.py      # ResolvedConnection + ConnectionResolver (+ BigQuery)
 ├── auth/
 │   └── middleware.py       # AdminCenterAuth + helpers RBAC
 ├── registration/
@@ -101,7 +111,10 @@ automaxia_utils/
 ├── migrations/
 │   └── runner.py           # run_migrations (alembic com retry)
 ├── token_tracking/
-│   └── counter.py          # contagem + preço multi-provider
+│   └── counter.py          # contagem + preço multi-provider + agente da requisição
+├── flows/
+│   └── runner.py           # FlowRunner, RegistroDeFerramentas, validar_fluxo (1.19.0)
+├── sql_allowlist.py        # verificar_sql contra allowed_tables (1.17.0)
 └── config/settings.py
 ```
 
@@ -127,7 +140,7 @@ Sem os guards, o import do pacote inteiro quebraria num RPA sem FastAPI.
 
 ```python
 # AdminCenter
-AdminCenterService, AdminCenterConfig
+AdminCenterService, AdminCenterConfig, AdminCenterEndpoints
 get_admin_center_service, reset_admin_center_service
 AdminCenterContext, track_execution
 
@@ -136,6 +149,12 @@ JobRunner, JobCancelled
 
 # Cofre de conexões
 ResolvedConnection, ConnectionResolver
+build_bigquery_client                                                 # 1.16.0+
+
+# Fluxos de agentes (1.19.0+) — também em automaxia_utils.flows (+ FalhaDoNo)
+FlowRunner, RegistroDeFerramentas, Ferramenta, ContextoFluxo
+PedidoLLM, RespostaLLM, ResultadoFluxo, validar_fluxo
+FluxoInvalido, IaNaoConfigurada, LimiteExcedido
 
 # Auto-registro (1.10.0+)
 ProductManifest, ProductRegistrationConfig
@@ -149,6 +168,7 @@ track_api_response, track_openai_call, estimate_tokens_and_cost
 count_tokens_tiktoken, count_tokens_litellm, count_tokens_smart
 extract_tokens_from_response
 HybridTokenCounter, LangChainTokenCallback, invalidate_model_price_cache
+definir_agente, agente_atual, agente_em_uso                          # agente da requisição
 
 # Auth (opcional — requer FastAPI)
 AdminCenterAuth, AdminCenterAuthConfig, AuthenticatedUser
@@ -157,6 +177,10 @@ login_via_admincenter
 has_permission, has_any_permission, enrich_user_with_permissions      # 1.11.0+
 require_permission, require_any_permission, invalidate_permission_cache
 ```
+
+Fora da raiz, por import do submódulo: `automaxia_utils.sql_allowlist`
+(1.17.0 — `verificar_sql`, `tabelas_referenciadas`, `filtrar_tabelas`,
+`liberada`, `normalizar_allowlist`, `TabelaNaoLiberada`, `DIALETOS_SQLGLOT`).
 
 Submódulos privados não têm garantia de estabilidade entre versões.
 
@@ -187,15 +211,18 @@ explícito no `.env` **vence** o escopo da chave.
 | `get_variable(environment_id?)` | `GET /environment/{env}/variables` | sync, cache |
 | `get_secret(name)` | `GET /secret?name=` | sync |
 | `resolve_connection(alias=, connection_id=, force_refresh=)` | `GET /database-connection/resolve` | sync, cache TTL |
-| `get_db_connection` / `get_db_engine` / `get_db_session` | (via `/resolve`) | sync, lazy import |
+| `get_db_connection` / `get_db_engine` / `get_db_session` / `get_bigquery_client` | (via `/resolve`) | sync, lazy import |
 | `invalidate_connection_cache(alias?)` | — | local |
 | `get_prompt(slug)` · `get_prompt_by_id(id)` · `get_prompts(...)` | `GET /prompt*` | sync, cache |
 | `get_effective_prompt(agent_slug, product_id?)` | `GET /prompt/effective-prompt` | sync |
+| `list_allowed_agents(jwt, product_id?)` · `is_agent_allowed` · `list_allowed_connection_ids` · `is_connection_allowed` | RBAC por perfil (`role_agents`/`role_connections`, com o **JWT do usuário**) | sync, cache |
+| `resolve_agent_id(agent_slug, product_id?)` | (cache do effective-prompt) | sync |
+| `product_scope(product_id)` (1.19.0) | — | context manager, `ContextVar` |
 | `log_prompt_usage(...)` | `POST /prompt-usage-log` | fila |
-| `log_application(...)` · `log_execution(...)` · `log_process(...)` | `POST /log/*` | fila |
-| `agent_step(agent_slug, label=)` · `execution_scope()` · `log_step(...)` | `POST /logs/step` | fila, **em lote** |
+| `log_application(...)` · `log_execution(...)` · `log_process(..., product_id?)` | `POST /logs/*` | fila |
+| `agent_step(agent_slug, label=, product_id?)` · `execution_scope()` · `log_step(..., product_id?)` | `POST /logs/step` | fila, **em lote, um POST por produto** (1.19.0) |
 | `get_application_logs(...)` | `GET /logs/application` | sync |
-| `track_token_usage(...)` | `POST /token-usage/` | fila |
+| `track_token_usage(..., product_id?)` | `POST /token-usage/` | fila |
 | `invalidate_model_cache` · `invalidate_effective_model_cache` | — | local |
 | `flush()` / `shutdown()` | — | drena fila / fecha túneis |
 
@@ -237,6 +264,32 @@ automaticamente em `extra_data` (thread-local `current_run_context()` em
 Pelo mesmo mecanismo, `log_process()` e `@track_execution` herdam o `job_id` do
 run (1.9.0) — é o que permite ao faturamento vincular execução ao job e aplicar
 a cobrança de mensagens Meta, que é opt-in por job.
+
+### 5.5 Produto em escopo (1.19.0)
+
+Para um satélite que **hospeda produtos derivados** (o Forge; contrato no SDD
+do ecossistema §5.12):
+
+```python
+with admin.product_scope(derivado_id):
+    admin.log_process('forge.execucao', 'started')        # run do FILHO
+    with admin.agent_step('redator', label='redigindo'):  # passo do FILHO
+        ep = admin.get_effective_prompt('redator')         # vínculo/modelo do FILHO
+```
+
+- Produto efetivo de cada escrita: **`product_id=` explícito > escopo > config**.
+- Dentro do escopo vão para o filho: `log_process`, `log_step`/`agent_step`,
+  `track_token_usage`, `get_effective_prompt`, `list_allowed_agents`,
+  `resolve_agent_id`. Ficam no produto da config: `log_execution` e
+  `log_application` (é o satélite atendendo a request).
+- Produto de escopo/explícito vai **sem `environment_id`** — o ambiente da
+  config é do pai.
+- `product_id` que não é UUID → `ValueError` na entrada do bloco.
+- O backend só aceita com a api-key do **pai** do produto (admincenter-api
+  `0061`); fora disso a escrita é recusada no envelope (WARNING do batch
+  worker, 1.15.1).
+- Atravessa threads copiadas com `contextvars.copy_context()`; thread aberta sem
+  copiar o contexto grava no produto da config.
 
 ---
 
@@ -290,6 +343,10 @@ start_heartbeat_loop(MANIFEST)
 | **Cadastro** (a tela vence) | `name`, `description`, `slug`, `status`, `visible_on_home` |
 | **Manifest** (todo deploy sobrescreve) | `version`, `base_url`, `frontend_url`, `product_type`, `health_path`, `contract_version`, `requires_connection`, `requires_connection_engines` + **replace-all das permissões** |
 
+**Fluxos (1.19.0):** `tools` (lista de `RegistroDeFerramentas.specs()`) e
+`flow_entrypoints` (`[{key, entradas: {nome: tipo}, saida_obrigatoria: [...]}]`)
+— listas de dicts, `None` = não declarado.
+
 **`None` significa "não declarado"** — `to_payload()` remove chaves nulas para
 não zerar no catálogo o que o produto não declarou. É deliberado em
 `requires_instance`/`requires_connection`: com default `False`, o re-registro
@@ -330,6 +387,68 @@ runner.raise_if_cancelled()              # em loops longos
 - **Cancelamento cooperativo:** evento `job.cancel_run` seta o `cancel_event` do
   run; `is_cancelled()`/`raise_if_cancelled()` levantam `JobCancelled`, que o
   `run_job` converte em `status='cancelled'`.
+- **Produtos derivados (1.19.0):**
+
+  ```python
+  runner = JobRunner(admin, produtos_filhos=True)
+  runner.register_derivados(lambda job: executar(job.product_id, job.slug))
+  runner.start(with_polling=True)
+  ```
+
+  Lista com `GET /agent/job?incluir_filhos=true`; job de filho tem chave interna
+  `<product_id>:<slug>` e vai para o handler único de `register_derivados`, que
+  recebe o `_JobConfig` e roda dentro de `product_scope(job.product_id)`. O
+  "rodar agora" do painel chega a filho por `force_run_at` — por isso
+  `with_polling=True`.
+
+---
+
+## 8A. Fluxos de agentes — `automaxia_utils.flows` (1.19.0)
+
+Interpretador do fluxo `formato: 1` (formato, nós e semântica: SDD do
+ecossistema §5.11.2). Primeiro consumidor: o Forge.
+
+```python
+registro = RegistroDeFerramentas()
+
+@registro.ferramenta('enviar_email', entradas=['assunto', 'corpo'],
+                     saida=['enviado'], efeito='email')
+def enviar_email(ctx: ContextoFluxo, entradas: dict, config: dict) -> dict:
+    ...
+
+MANIFEST = ProductManifest(..., tools=registro.specs())
+
+runner = FlowRunner(admin, registro, chamar_llm)       # chamar_llm(PedidoLLM) -> RespostaLLM
+problemas = validar_fluxo(definicao, registro, entradas=['pergunta'], saidas=['resposta'])
+with admin.product_scope(derivado_id):
+    r = runner.run(definicao, {'pergunta': '...'}, modo='teste')
+r.ok, r.saida, r.falha, r.no_falha, r.traco, r.tokens_entrada, r.correlation_id
+```
+
+**Regras do motor (não dependem do desenho):**
+
+| # | Regra |
+|---|---|
+| RN-LIB-FL-01 | Prompt e modelo de todo nó agente vêm de `get_effective_prompt(slug)` do produto em escopo. Sem vínculo ou sem modelo → `IaNaoConfigurada`; nunca texto ou modelo de reserva. |
+| RN-LIB-FL-02 | Em `modo='teste'`, ferramenta com `efeito` **não é chamada**: o nó devolve `{simulado: True, enviado: False, faria: {...}}`. |
+| RN-LIB-FL-03 | Cada nó `agente`/`ferramenta` é um `agent_step` dentro de um `execution_scope`; o run faturado é de quem chama. |
+| RN-LIB-FL-04 | Ferramenta que sumiu do registro ou mudou de `versao` falha o nó ("fluxo quebrado") — nunca é pulada. |
+| RN-LIB-FL-05 | Falha de nó não levanta: vai em `ResultadoFluxo.falha`/`no_falha` e numa linha `tipo='erro'` do `traco`. |
+| RN-LIB-FL-06 | Saída `json`/`escolha` fora do formato ganha **uma** nova tentativa com a correção; a segunda falha o nó. |
+
+**Limites** (`FlowRunner(...)`): `max_nos` (padrão e teto 60 nós executados),
+`max_tokens` e `max_segundos` (opcionais, por execução), `max_voltas` 1–5 por
+aresta de retorno, `max_chars_entrada` (padrão **12.000** caracteres por entrada
+de agente — o excedente é cortado com a marca `[... cortado: N caracteres]`) e
+`paralelo` (padrão 4 threads para ramos paralelos).
+
+**`PedidoLLM`**: `modelo`, `sistema`, `usuario`, `json`, `temperatura`,
+`max_tokens` (os dois últimos do effective-prompt; `None` = não enviar).
+**`RespostaLLM`**: `texto`, `tokens_entrada`, `tokens_saida`.
+
+`run(..., ao_passo=cb)` chama `cb(registro)` ao entrar e ao sair de cada nó
+(progresso ao vivo); `rotulo_versao` vai no `detail` do passo como
+`flow_version`.
 
 ---
 
@@ -418,6 +537,9 @@ ADMIN_CENTER_JOBS_WEBHOOK_SECRET=<products.webhook_secret>
 ADMIN_CENTER_AUTH_SECRET=<mesma SECRET_KEY do AdminCenter>
 AUTH_CACHE_TTL=300
 AUTH_PRODUCT_GATE_FAIL_OPEN=false  # só para destravar incidente
+
+# BigQuery (1.16.0) — teto de bytes por consulta quando a chamada não passa um
+BIGQUERY_MAXIMUM_BYTES_BILLED=
 ```
 
 ---
@@ -439,7 +561,8 @@ AUTH_PRODUCT_GATE_FAIL_OPEN=false  # só para destravar incidente
 | v1.13.0 | `fastapi` e `python-jose` declarados como extras (CI da lib passa) |
 | v1.14.0 *(2026-08-26)* | Sincronização com a `infrabalance-shared-utils` 2.9.0: gate de produto voltou a funcionar (`ADMIN_CENTER_PRODUCT_SLUG`), auth em dev deixa de bater em produção, `ResolvedConnection` cobre `rest`/`arcgis`/`databricks` e os campos da migration 0042, `log_min_level`, desmembramento do `context` do log, guardas de `has_logging_identity()`, descoberta de `product_id`/`environment_id` por slug, `log_process(execution_id=…)`. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
 | v1.15.0 *(2026-08-31)* | **Execução observável**: `agent_step`/`execution_scope`/`log_step` gravam a linha do tempo de dentro de uma execução (`execution_steps`, migration 0044), com o modelo EFETIVO por etapa; `log_process` ganha `agent_slug`/`area_agent_slug`/`connection_id` (migration 0043) resolvendo pelo mesmo cache do token tracking; passos vão num POST só. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
-| **v1.19.0** *(atual, 2026-09-25)* | **Produtos derivados e fluxos**: `product_scope`, `product_id` explícito na telemetria, `JobRunner(produtos_filhos=True)` + `register_derivados`, `automaxia_utils.flows` (`FlowRunner`, ferramentas, `validar_fluxo`), `tools`/`flow_entrypoints` no manifest. Exige admincenter-api com a migration `0061` para gravar em produto filho. |
+| **v1.20.0** *(atual, 2026-10-05)* | **Entrada opcional em ferramenta**: `opcionais=` no `@ferramenta`, a lista no `spec()` e `validar_fluxo` sem "sem origem" nelas (`LIB-40`). Sem mudança para quem não usa. |
+| **v1.19.0** *(2026-09-25, publicada no mesmo dia — `2d3a4bf`, tag `v1.19.0`)* | **Produtos derivados e fluxos**: `product_scope`, `product_id` explícito na telemetria, `JobRunner(produtos_filhos=True)` + `register_derivados`, `automaxia_utils.flows` (`FlowRunner`, ferramentas, `validar_fluxo`), `tools`/`flow_entrypoints` no manifest. Exige admincenter-api com a migration `0061` para gravar em produto filho. |
 | **v1.18.0** *(2026-09-21, publicada no mesmo dia — `c3001a6`)* | **Camada semântica**: `ResolvedConnection.metrics` — as métricas de negócio ATIVAS da conexão (migration `0054` do AdminCenter). Lista vazia com AdminCenter anterior. |
 | **v1.17.0** *(2026-09-17, publicada 21/09)* | **Allowlist de tabelas por conexão**: `sql_allowlist` (`tabelas_referenciadas`, `verificar_sql`, `DIALETOS_SQLGLOT`, via sqlglot) e `allowed_tables` no `ResolvedConnection`. Os satélites recusam, ANTES do banco, SQL que lê objeto fora da lista (migration `0053` do AdminCenter). |
 | **v1.16.0** *(2026-09-15, publicada junto com a 1.17)* | **BigQuery no cofre**: engine `bigquery` no `ConnectionResolver` (projeto como catálogo, dataset como schema). |
@@ -466,5 +589,14 @@ Sem PyPI. A partir da 1.14.0 o histórico canônico é o
   até o processo sair; em CLI efêmera atrasa o exit em até `batch_interval`.
 - **`AdminCenterAuth` LOCAL** assume a mesma `SECRET_KEY` em todo o ecossistema;
   rotação é big-bang (sem `kid`/JWKS).
-- **Cobertura de teste parcial** — o `JobRunner` e o broker de conexões não têm
-  suíte própria.
+- **Cobertura de teste parcial** — o ciclo do `JobRunner` e o broker de conexões
+  não têm suíte própria (há só `test_jobrunner_filhos.py`, do modo
+  `produtos_filhos`, e `test_connections_bigquery.py`).
+- **`FlowRunner` síncrono** (ramos em threads) — em rota FastAPI, use
+  `run_in_threadpool` (`LIB-39`).
+- **Entrada de ferramenta é sempre obrigatória** para o `validar_fluxo`
+  (`LIB-40`); o Forge contorna na validação dele.
+- **Instrução do nó no fim do `system`** perde para o prompt do agente (medido
+  9/15 no Forge, `LIB-41`); o Forge remonta a mensagem no `chamar_llm` dele.
+- **Corte de entrada sem aviso estruturado** — `max_chars_entrada` corta em
+  silêncio; quem chama precisa conferir o `traco` (`LIB-42`).

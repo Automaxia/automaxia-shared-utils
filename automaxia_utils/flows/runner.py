@@ -90,6 +90,7 @@ class Ferramenta:
     saida: List[str] = field(default_factory=list)
     selada: bool = False            # guardas internas que nenhum desenho desliga
     efeito: Optional[str] = None    # 'email' | 'whatsapp' | 'webhook' | ... — age fora da plataforma
+    opcionais: List[str] = field(default_factory=list)   # entradas que podem ficar sem origem (1.20.0)
 
     def spec(self) -> Dict[str, Any]:
         """Declaracao para o manifest (`tools`, SDD §5.11.3)."""
@@ -97,6 +98,8 @@ class Ferramenta:
              'entradas': list(self.entradas), 'saida': list(self.saida), 'selada': self.selada}
         if self.efeito:
             d['efeito'] = self.efeito
+        if self.opcionais:
+            d['opcionais'] = sorted(self.opcionais)
         return d
 
 
@@ -114,16 +117,22 @@ class RegistroDeFerramentas:
         self._itens: Dict[str, Ferramenta] = {}
 
     def ferramenta(self, nome: str, versao: int = 1, descricao: str = '', entradas=(), saida=(),
-                   selada: bool = False, efeito: Optional[str] = None):
+                   selada: bool = False, efeito: Optional[str] = None, opcionais=()):
+        """`opcionais`: entradas declaradas que podem ficar SEM origem — a validacao nao reclama
+        delas e o runner so' entrega a funcao o que foi mapeado (a funcao usa o padrao dela)."""
         def decorar(funcao):
             self.adicionar(Ferramenta(nome=nome, funcao=funcao, versao=versao, descricao=descricao,
-                                      entradas=list(entradas), saida=list(saida), selada=selada, efeito=efeito))
+                                      entradas=list(entradas), saida=list(saida), selada=selada, efeito=efeito,
+                                      opcionais=list(opcionais)))
             return funcao
         return decorar
 
     def adicionar(self, f: Ferramenta) -> None:
         if f.nome in self._itens:
             raise ValueError(f"Ferramenta '{f.nome}' registrada duas vezes")
+        fora = [o for o in f.opcionais if o not in f.entradas]
+        if fora:
+            raise ValueError(f"Ferramenta '{f.nome}': opcional fora das entradas: {', '.join(fora)}")
         self._itens[f.nome] = f
 
     def get(self, nome: str) -> Optional[Ferramenta]:
@@ -310,7 +319,7 @@ def validar_fluxo(definicao: Dict[str, Any], ferramentas: Optional[RegistroDeFer
                 erro(f"O produto nao declara a ferramenta \"{no.get('ferramenta')}\".", no_id)
             if f:
                 for c in f.entradas:
-                    if not _alternativas((no.get('entradas') or {}).get(c)):
+                    if c not in f.opcionais and not _alternativas((no.get('entradas') or {}).get(c)):
                         erro(f'Entrada "{c}" sem origem.', no_id)
                 if f.efeito and not (no.get('config') or {}).get('destino'):
                     erro('Escolha o destino: envio so vai para destino cadastrado.', no_id)

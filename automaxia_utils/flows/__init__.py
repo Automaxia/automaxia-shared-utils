@@ -1,4 +1,4 @@
-"""Fluxos de agentes (1.19.0) — SDD do ecossistema §5.11 e §5.12."""
+"""Fluxos de agentes (1.19.0; entrada opcional na 1.20.0) — SDD do ecossistema §5.11 e §5.12."""
 from .runner import (
     ContextoFluxo,
     FalhaDoNo,
