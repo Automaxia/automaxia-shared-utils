@@ -18,9 +18,10 @@ FUSO = "America/Sao_Paulo"
 CRONS = [
     "0 8 * * 1-5", "30 7 * * 0", "0 6 * * 6,0", "0 8 * * 7", "0 10 * * *", "0 8 * * mon-fri",
     "0 8 * * 1-5/2", "0 8 * * */2", "0 8 * * 5-6", "0 12 1 * *", "0 8 * * 0-2", "0 8 * * 5-7",
-    "0 8 * * 0-6", "0 8 * * 1,3", "0 8 * * 0-3/2", "0 8 * * 3/2", "0 9 * * 1-3,5", "0 8 * * 0-7",
-    "0 8 * * 1/3",
+    "0 8 * * 0-6", "0 8 * * 1,3", "0 8 * * 0-3/2", "0 9 * * 1-3,5", "0 8 * * 0-7",
 ]
+# Fora de proposito: `N/passo` sem fim (`3/2`, `1/3`). O proprio croniter muda de leitura entre
+# versoes (o 7 = domingo entra ou nao no fim implicito) — nao ha referencia estavel para comparar.
 
 
 @pytest.mark.parametrize("expressao", CRONS)
