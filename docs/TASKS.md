@@ -5,10 +5,8 @@
 > **Convenção de ID:** itens abertos usam `LIB-##`. Itens concluídos ficam como
 > checklist histórica, sem ID.
 
-Última revisão: **2026-10-05** · lib **1.20.2** (a 1.20.1 em `e7efd42` e a 1.20.0 em
-`8cdf25c`, no mesmo dia). Fechados `LIB-40` (entrada opcional), `LIB-43` (dia da semana do
-cron) e `LIB-44` (intervalo que começa no domingo + teste do `gatilho_cron`).
-Seções 1.19.0 e 1.20.x no fim. Antes, 28/09/2026 (1.19.0, `2d3a4bf`).
+Última revisão: **2026-10-27** · lib **1.21.0** — `LIB-45` (rate limit para os satélites).
+Seções 1.19.0, 1.20.x e 1.21.0 no fim.
 
 > O backlog abaixo foi escrito na 1.12.0 e continua válido — o que entrou depois
 > (1.13.0 → 1.20.1) está no [`../CHANGELOG.md`](../CHANGELOG.md), que é o
@@ -393,5 +391,17 @@ Seções 1.19.0 e 1.20.x no fim. Antes, 28/09/2026 (1.19.0, `2d3a4bf`).
       domingo.** Na 1.20.1, `0-2` virava `sun-tue` e o APScheduler recusava ("The minimum
       value in a range must not be higher than the maximum" — para ele domingo é o último
       dia): o job ficava fora do agendador. Agora o dia da semana numérico vira sempre
-      lista explícita de nomes. `tests/test_gatilho_cron.py`: 19 crons contra o croniter
-      (10 disparos cada), incluindo `0-2`, `5-7`, `0-7`, `3/2` e `1/3`.
+      lista explícita de nomes. `tests/test_gatilho_cron.py`: 17 crons contra o croniter
+      (10 disparos cada), incluindo `0-2`, `5-7` e `0-7` (o `N/passo` sem fim ficou de fora: o croniter muda de leitura entre versões).
+
+### 1.21.0 (27/10/2026)
+
+- [x] **LIB-45 / `ST-106`** — (27/10/2026, **1.21.0**) **Rate limit para os satélites.** Só o
+      AdminCenter e o Talk limitavam requisições, cada um com o seu middleware; Vision, Harvest,
+      Office, Viewer, Forge e Cartógrafo aceitavam qualquer ritmo, inclusive nas rotas de LLM.
+      `automaxia_utils.rate_limit` (`RateLimitMiddleware`, `Limite`), porte do middleware do
+      admincenter-api com cota por grupo de rota, identidade por JWT/api-key/IP, Redis com
+      fallback em memória e ambiente lido na primeira requisição (SDD §4.7, D-19). Conferido com
+      script contra um app FastAPI (cota padrão, rota com `*` e `**`, isentos, IP do XFF, JWT
+      PyJWT, Redis local e Redis fora do ar → memória) e importando o `server.py` dos seis
+      satélites com a lib do monorepo.

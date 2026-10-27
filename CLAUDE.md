@@ -31,7 +31,7 @@ e fornecer infraestrutura compartilhada:
   entra no catálogo do AdminCenter.
 - **Migrations**: `run_migrations` (alembic com retry) para o lifespan.
 
-Versão atual: **1.14.0** — histórico em [CHANGELOG.md](CHANGELOG.md).
+Versão atual: **1.21.0** (em `setup.py` e `automaxia_utils/__init__.py` — mexa nos dois) — histórico em [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -66,7 +66,7 @@ pip install "automaxia-utils[dev]"          # pytest, black, flake8, mypy, twine
 ```
 automaxia-shared-utils/
 ├── README.md                       # ~500 linhas com quickstart + exemplos
-├── setup.py                        # versão 1.14.0
+├── setup.py                        # versão 1.21.0 (igual ao __version__ do __init__.py)
 ├── requirements.txt
 ├── automaxia_utils/
 │   ├── __init__.py                 # API pública re-exportada
@@ -87,6 +87,7 @@ automaxia-shared-utils/
 │   ├── token_tracking/
 │   │   ├── __init__.py
 │   │   └── counter.py              # HybridTokenCounter, LangChainTokenCallback, …
+│   ├── rate_limit.py               # RateLimitMiddleware + Limite (1.21.0)
 │   └── config/
 │       ├── __init__.py
 │       └── settings.py             # placeholder mínimo
@@ -357,6 +358,11 @@ import …`) é considerado privado e pode quebrar entre versões.
   construção do manifest engolido por `except Exception` deixa
   `PRODUCT_MANIFEST=None` e o produto **nunca se registra, em silêncio**.
 
+- **Rate limit lê o ambiente na 1ª requisição**, não no import nem no
+  `__init__` do middleware: o Starlette monta a pilha antes do lifespan, e é no
+  lifespan que o satélite traz as variáveis do AdminCenter. Sem Redis o limite
+  vale por worker do gunicorn (teto efetivo = N × cota). Registre-o ANTES do
+  `CORSMiddleware`, senão o 429 sai sem cabeçalho de CORS.
 - **JWT expira em 1h**: o método `_ensure_token()` deve ser chamado antes
   de qualquer request autenticada — não cacheie o header `Authorization`
   além do necessário.

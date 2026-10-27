@@ -2,7 +2,7 @@
 Automaxia Utils - Pacote compartilhado
 """
 
-__version__ = "1.20.2"
+__version__ = "1.21.0"
 __author__ = "Automaxia"
 
 # Importar de admin_center
@@ -96,6 +96,13 @@ try:
 except ImportError:
     _AUTH_AVAILABLE = False
 
+# Rate limit (1.21.0) — middleware Starlette, opcional como o auth.
+try:
+    from .rate_limit import Limite, RateLimitMiddleware
+    _RATE_LIMIT_AVAILABLE = True
+except ImportError:
+    _RATE_LIMIT_AVAILABLE = False
+
 __all__ = [
     # Fluxos de agentes (1.19.0)
     "FlowRunner", "RegistroDeFerramentas", "Ferramenta", "ContextoFluxo",
@@ -137,6 +144,9 @@ __all__ = [
     "send_heartbeat",
     "start_heartbeat_loop",
 ]
+
+if _RATE_LIMIT_AVAILABLE:
+    __all__ += ["Limite", "RateLimitMiddleware"]
 
 if _MIGRATIONS_AVAILABLE:
     __all__ += ["run_migrations"]

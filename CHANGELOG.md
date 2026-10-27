@@ -8,6 +8,19 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.21.0] — 2026-10-27
+
+Responsável técnico: Wesley Romualdo da Silva
+
+### Adicionado
+
+- **`automaxia_utils.rate_limit`** (`LIB-45`, `ST-106`): `RateLimitMiddleware` (Starlette) e
+  `Limite`, janela deslizante por chamador — `user_id`/`sub` do JWT, hash da `X-API-Key` ou o
+  primeiro IP do `X-Forwarded-For`. Redis (`RATE_LIMIT_REDIS_URL` ou `REDIS_URL`) com fallback em
+  memória; fail-open. Cota padrão 300/min (`RATE_LIMIT_REQUESTS`), cota própria por rota com
+  `Limite("/api/produtos/*/montar", 10)`; `RATE_LIMIT_ENABLED=false` desliga. Exportado na raiz
+  quando o Starlette está instalado. Porte do middleware do admincenter-api.
+
 ## [1.20.2] — 2026-10-05
 
 Responsável técnico: Wesley Romualdo da Silva
@@ -21,7 +34,7 @@ Responsável técnico: Wesley Romualdo da Silva
 
 ### Adicionado
 
-- `tests/test_gatilho_cron.py`: 19 crons comparados com o croniter (o motor do AdminCenter),
+- `tests/test_gatilho_cron.py`: 17 crons comparados com o croniter (o motor do AdminCenter),
   10 disparos cada, e "dias úteis não rodam no sábado".
 
 ## [1.20.1] — 2026-10-05

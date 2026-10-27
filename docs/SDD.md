@@ -1,13 +1,13 @@
 # SDD — automaxia-shared-utils
 
-> Desenho interno da lib `automaxia_utils` **1.20.2**.
+> Desenho interno da lib `automaxia_utils` **1.21.0**.
 > Requisitos: [SPEC.md](SPEC.md) · Backlog: [TASKS.md](TASKS.md) ·
 > Histórico: [`../CHANGELOG.md`](../CHANGELOG.md)
 > Contratos transversais: [`../../../docs/SDD.md`](../../../docs/SDD.md) — **não
 > repetidos aqui** (JWT, cofre, auto-registro, silo `mode`, linha do tempo §5.6,
 > fluxos §5.11, produtos derivados §5.12).
 
-Última revisão: **2026-10-05** · lib **1.20.2** (dia da semana sempre em lista, `LIB-44`);
+Última revisão: **2026-10-27** · lib **1.21.0** (rate limit para os satélites, `LIB-45`, §4.7 e D-19);
 antes, no mesmo dia, a **1.20.1 publicada** (`e7efd42`, tag `v1.20.1`) — entrada opcional em ferramenta (1.20.0, §4.6) e o cron do `JobRunner`
 lido no padrão (1.20.1, §4.4, D-17). Antes, 28/09/2026 (1.19.0, `2d3a4bf`).
 
@@ -64,6 +64,7 @@ dependencies de permissão negam com 503 quando não conseguem decidir. Preferir
 | `migrations/runner.py` | `alembic upgrade` com retry | **alembic** (opcional) |
 | `token_tracking/counter.py` | Contagem e preço multi-provider; agente da requisição (`definir_agente`/`agente_em_uso`) | lazy: `tiktoken`, `litellm` |
 | `sql_allowlist.py` | `verificar_sql`/`tabelas_referenciadas`/`filtrar_tabelas` contra a allowlist da conexão (1.17.0) | `sqlglot` (core) |
+| `rate_limit.py` | `RateLimitMiddleware` + `Limite`: janela deslizante por chamador (1.21.0) | **Starlette** (opcional); lazy: `redis`, `jose` ou `jwt` |
 | `flows/runner.py` | `FlowRunner`, `RegistroDeFerramentas`, `validar_fluxo` (1.19.0) | nenhuma — recebe o `AdminCenterService` e o LLM por injeção |
 
 Nenhum módulo importa outro fora de `admin_center` ↔ `jobs` (run context) — é o
@@ -181,7 +182,7 @@ campos cai no `from_crontab`. O motivo: o AdminCenter calcula o `next_run_at`
 com o croniter (padrão), e o `from_crontab` do APScheduler 3.x lê 0 = segunda —
 `1-5` disparava de terça a sábado (agendas do Forge, 03–05/10/2026). Erro ao
 montar o gatilho só loga e o job fica fora do agendador. `tests/test_gatilho_cron.py`
-compara 19 crons com o croniter.
+compara 17 crons com o croniter.
 
 `job.cancel_run` seta `cancel_event` no `_RunContext`; se o handler não cooperar
 mas a flag ficou setada, o `run_job` reporta `cancelled` mesmo assim — o registro
@@ -318,6 +319,28 @@ descreve a trilha completa, proposta):
 - o `ResultadoFluxo.traco` guarda entradas e saídas de cada nó em memória —
   quem chama decide se grava (RN-FL-03 é do produto).
 
+### 4.7 Rate limit (1.21.0)
+
+```
+requisição → OPTIONS ou isento (/health, /readiness, /docs…)? → passa
+           → identidade: user_id|sub do JWT → hash da X-API-Key → 1º IP do X-Forwarded-For
+           → grupo: 1º Limite cuja rota casa (`*` = um segmento, `**` = o resto) ou "*" (cota padrão)
+           → janela deslizante em Redis (sorted set `rl:<produto>:<identidade>|<grupo>`) ou memória
+           → estourou? 429 + Retry-After + X-RateLimit-*   senão segue e devolve os X-RateLimit-*
+```
+
+- **Ambiente lido na primeira requisição** (`RATE_LIMIT_ENABLED`, `RATE_LIMIT_REQUESTS`,
+  `RATE_LIMIT_REDIS_URL`/`REDIS_URL`, `SECRET_KEY`/`JWT_SECRET_KEY`, `ALGORITHM`): o Starlette
+  constrói a pilha de middlewares antes do lifespan, e o satélite só carrega as variáveis do
+  AdminCenter no lifespan.
+- **Redis que cai vira memória** até o processo reiniciar (sem isso cada requisição pagaria o
+  timeout de conexão). Qualquer exceção do próprio limitador deixa a requisição passar.
+- **Memória vale por processo**: com o gunicorn em N workers o teto efetivo é N × cota. A poda
+  dos buckets frios só roda acima de 50 mil chaves.
+- O IP é o **primeiro** valor do `X-Forwarded-For` porque, no cluster, o ingress-nginx
+  sobrescreve o cabeçalho com o `$remote_addr` e o nginx do front só acrescenta no fim — contrato
+  e ressalvas no [SDD do ecossistema §5.15](../../../docs/SDD.md).
+
 ---
 
 ## 5. Decisões de design
@@ -341,6 +364,7 @@ descreve a trilha completa, proposta):
 | D-15 | Falha de nó vira **resultado**, não exceção (1.19.0) | quem chama precisa fechar o run faturado e mostrar o rastro até o nó que falhou |
 | D-16 | `sql_allowlist` **fail-closed** (1.17.0) | SQL que o `sqlglot` não consegue ler é recusado — "não sei, então não", como D-04 |
 | D-17 | Cron do job é o **padrão** (o do croniter do AdminCenter), convertido para o APScheduler com o dia da semana em **nomes** (1.20.1) | quem mostra o próximo horário (AdminCenter) e quem dispara (lib) precisam ler a mesma expressão do mesmo jeito; com nomes não há numeração para divergir |
+| D-19 | Rate limit **fail-open** e com cota por grupo de rota, não por caminho (1.21.0) | o limitador protege o produto e não pode derrubá-lo; contar por caminho exato deixa rota com id na URL sem limite efetivo, e uma cota única faria o polling de uma tela gastar a cota da rota de LLM |
 | D-18 | Entrada opcional **declarada na ferramenta**, não descoberta pela validação (1.20.0) | quem sabe se a função tem padrão é a ferramenta; o Forge mantinha uma lista paralela (`OPCIONAIS`) que podia divergir do código |
 
 ---
