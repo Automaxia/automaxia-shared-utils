@@ -5,8 +5,8 @@
 > **Convenção de ID:** itens abertos usam `LIB-##`. Itens concluídos ficam como
 > checklist histórica, sem ID.
 
-Última revisão: **2026-10-27** · lib **1.21.0** — `LIB-45` (rate limit para os satélites).
-Seções 1.19.0, 1.20.x e 1.21.0 no fim.
+Última revisão: **2026-10-27** · lib **1.22.0** — `LIB-46` (dono do consumo de IA) e `LIB-47` (teto mensal de IA);
+a 1.21.0 no mesmo dia (`LIB-45`, rate limit). Seções 1.19.0 a 1.22.0 no fim.
 
 > O backlog abaixo foi escrito na 1.12.0 e continua válido — o que entrou depois
 > (1.13.0 → 1.20.1) está no [`../CHANGELOG.md`](../CHANGELOG.md), que é o
@@ -404,4 +404,19 @@ Seções 1.19.0, 1.20.x e 1.21.0 no fim.
       fallback em memória e ambiente lido na primeira requisição (SDD §4.7, D-19). Conferido com
       script contra um app FastAPI (cota padrão, rota com `*` e `**`, isentos, IP do XFF, JWT
       PyJWT, Redis local e Redis fora do ar → memória) e importando o `server.py` dos seis
-      satélites com a lib do monorepo.
+      satélites com a lib do monorepo. **Publicada no mesmo dia** (`c488974`, tag `v1.21.0`).
+
+### 1.22.0 (27/10/2026)
+
+- [x] **LIB-46 / `ST-107`** — (27/10/2026, **1.22.0**) **Consumo de IA na organização de quem
+      usou.** O faturamento somava IA pelo dono do produto, e quase nenhum satélite passava
+      `user_id`. `admin_center/usuario.py`: o `validate_token` marca o usuário da requisição e o
+      `track_token_usage` o envia (SDD §4.8). Provado no AdminCenter local com a lib do monorepo:
+      consumo do produto `viewer` (organização da plataforma) feito por usuário de outra
+      organização gravou `organization_id` = a do usuário.
+- [x] **LIB-47 / `ST-108`** — (27/10/2026, **1.22.0**) **Teto mensal de IA.**
+      `situacao_consumo_ia`/`verificar_teto_ia` (cache 60 s, fail-open), `TetoDeIaAtingido`,
+      `TetoDeIaMiddleware` (402 nas rotas de IA) e conferência no nó de agente do `FlowRunner`
+      (D-20). Provado no local: sem teto → livre; teto R$ 0,01 → `bloqueado`, a exceção sai, o
+      middleware devolve 402 na rota de IA e 200 na comum e para a outra organização, e o aviso
+      entra uma vez só no sino.

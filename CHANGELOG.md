@@ -8,6 +8,23 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.22.0] — 2026-10-27
+
+Responsável técnico: Wesley Romualdo da Silva
+
+### Adicionado
+
+- **Dono do consumo de IA** (`LIB-46`, `ST-107`): `admin_center/usuario.py` — o
+  `AdminCenterAuth.validate_token` marca num `ContextVar` o usuário (e a organização) da
+  requisição, e o `track_token_usage` manda esse `user_id` quando o chamador não passou um. O
+  AdminCenter (migration `0078`) grava o consumo na organização desse usuário. Exportados
+  `definir_usuario_da_requisicao` e `usuario_da_requisicao`.
+- **Teto mensal de IA** (`LIB-47`, `ST-108`): `AdminCenterService.situacao_consumo_ia()` (cache de
+  60 s) e `verificar_teto_ia()`, que levanta `TetoDeIaAtingido`; `TetoDeIaMiddleware`
+  (`automaxia_utils.rate_limit`) responde 402 nas rotas de IA declaradas; o `FlowRunner` confere
+  antes de cada nó de agente. Tudo fail-open. Precisa do admincenter-api com a migration `0079`
+  (sem ela, a consulta dá 404 e a IA segue).
+
 ## [1.21.0] — 2026-10-27
 
 Responsável técnico: Wesley Romualdo da Silva

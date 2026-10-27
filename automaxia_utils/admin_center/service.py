@@ -142,6 +142,7 @@ class AdminCenterConfig:
 class AdminCenterEndpoints:
     """Endpoints do Admin Center API"""
     TOKEN_USAGE = "/token-usage/"
+    CONSUMO_IA_SITUACAO = "/billing/consumo-ia/situacao"
     LOG_EXECUTION = "/logs/execution"
     LOG_APPLICATION = "/logs/application"
     LOG_PROCESS = "/logs/process"
@@ -879,6 +880,11 @@ class AdminCenterService:
 
         if not request_id:
             request_id = str(uuid.uuid4())
+        # Dono do consumo (1.22.0): sem user_id explicito, o usuario do JWT da
+        # requisicao — o AdminCenter deduz a organizacao por ele.
+        if not user_id:
+            from .usuario import usuario_da_requisicao
+            user_id = usuario_da_requisicao()[0]
 
         # Resolução das dimensões de agente. O id explícito do call site vence;
         # senão traduz o slug. Sem etapa explícita, a etapa é a própria área.
@@ -1807,6 +1813,44 @@ class AdminCenterService:
 
         self.logger.warning(f"Agente '{agent_slug}' não vinculado ao produto {pid}")
         return None
+
+    # ------------------------------------------------------------------
+    # Teto mensal de IA (1.22.0, `admin_center/teto_ia.py`)
+    # ------------------------------------------------------------------
+    def situacao_consumo_ia(self, organization_id: str = None,
+                            product_id: str = None) -> Optional[Dict]:
+        """Gasto de IA do mês × teto da organização, ou None (sem dado → segue).
+
+        Organização: a explícita; senão a do usuário da requisição (JWT); senão
+        o AdminCenter usa a do produto (o derivado do Forge, numa agenda). Cache
+        de 60 s por chave."""
+        if not self.config.enabled:
+            return None
+        from .teto_ia import do_cache, guardar
+        from .usuario import usuario_da_requisicao
+        org = organization_id or usuario_da_requisicao()[1]
+        pid = None if org else self._produto_efetivo(product_id)
+        chave = ("org", str(org)) if org else ("produto", str(pid or ""))
+        achou, valor = do_cache(chave)
+        if achou:
+            return valor
+        params = {"organization_id": org} if org else ({"product_id": pid} if pid else {})
+        try:
+            resposta = self._make_request("GET", AdminCenterEndpoints.CONSUMO_IA_SITUACAO, params=params)
+            valor = resposta.get("data") if isinstance(resposta, dict) else None
+        except Exception as exc:  # fail-open: o teto nunca derruba o produto
+            self.logger.warning(f"Teto de IA: consulta falhou, seguindo sem teto: {exc}")
+            valor = None
+        guardar(chave, valor)
+        return valor
+
+    def verificar_teto_ia(self, organization_id: str = None, product_id: str = None) -> None:
+        """Levanta `TetoDeIaAtingido` se o teto de IA da organização estourou.
+        Chame ANTES do LLM. Sem resposta do AdminCenter, não levanta."""
+        from .teto_ia import TetoDeIaAtingido
+        sit = self.situacao_consumo_ia(organization_id, product_id)
+        if sit and sit.get("bloqueado"):
+            raise TetoDeIaAtingido(sit.get("mensagem") or "Limite mensal de IA atingido.", sit)
 
     # ------------------------------------------------------------------
     # RBAC por perfil (role_agents / role_connections, migration 0037)

@@ -31,7 +31,7 @@ e fornecer infraestrutura compartilhada:
   entra no catálogo do AdminCenter.
 - **Migrations**: `run_migrations` (alembic com retry) para o lifespan.
 
-Versão atual: **1.21.0** (em `setup.py` e `automaxia_utils/__init__.py` — mexa nos dois) — histórico em [CHANGELOG.md](CHANGELOG.md).
+Versão atual: **1.22.0** (em `setup.py` e `automaxia_utils/__init__.py` — mexa nos dois) — histórico em [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -66,7 +66,7 @@ pip install "automaxia-utils[dev]"          # pytest, black, flake8, mypy, twine
 ```
 automaxia-shared-utils/
 ├── README.md                       # ~500 linhas com quickstart + exemplos
-├── setup.py                        # versão 1.21.0 (igual ao __version__ do __init__.py)
+├── setup.py                        # versão 1.22.0 (igual ao __version__ do __init__.py)
 ├── requirements.txt
 ├── automaxia_utils/
 │   ├── __init__.py                 # API pública re-exportada
@@ -74,7 +74,9 @@ automaxia-shared-utils/
 │   │   ├── __init__.py
 │   │   ├── service.py              # AdminCenterService (~970 linhas)
 │   │   ├── jobs.py                 # JobRunner (APScheduler + webhook server)
-│   │   └── connections.py          # ResolvedConnection + ConnectionResolver (broker DB)
+│   │   ├── connections.py          # ResolvedConnection + ConnectionResolver (broker DB)
+│   │   ├── usuario.py              # usuário da requisição = dono do consumo de IA (1.22.0)
+│   │   └── teto_ia.py              # TetoDeIaAtingido + cache da situação do teto (1.22.0)
 │   ├── auth/
 │   │   ├── __init__.py
 │   │   └── middleware.py           # AdminCenterAuth, get_current_user, …
@@ -87,7 +89,7 @@ automaxia-shared-utils/
 │   ├── token_tracking/
 │   │   ├── __init__.py
 │   │   └── counter.py              # HybridTokenCounter, LangChainTokenCallback, …
-│   ├── rate_limit.py               # RateLimitMiddleware + Limite (1.21.0)
+│   ├── rate_limit.py               # RateLimitMiddleware + Limite (1.21.0) + TetoDeIaMiddleware (1.22.0)
 │   └── config/
 │       ├── __init__.py
 │       └── settings.py             # placeholder mínimo
@@ -363,6 +365,12 @@ import …`) é considerado privado e pode quebrar entre versões.
   lifespan que o satélite traz as variáveis do AdminCenter. Sem Redis o limite
   vale por worker do gunicorn (teto efetivo = N × cota). Registre-o ANTES do
   `CORSMiddleware`, senão o 429 sai sem cabeçalho de CORS.
+- **Dono do consumo vem do `validate_token`** (1.22.0): é ele que marca o usuário da
+  requisição no `ContextVar` lido pelo `track_token_usage`. Thread criada à mão
+  (`threading.Thread`) não herda o contexto — ali o consumo cai na organização do
+  produto. Use `asyncio.to_thread`/`run_in_threadpool`, que copiam.
+- **Teto de IA é fail-open e tem cache de 60 s**: AdminCenter fora → a IA segue; subir
+  o teto na tela leva até 1 min para liberar.
 - **JWT expira em 1h**: o método `_ensure_token()` deve ser chamado antes
   de qualquer request autenticada — não cacheie o header `Authorization`
   além do necessário.

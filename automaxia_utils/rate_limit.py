@@ -306,4 +306,57 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return await self._memoria.hit(chave, maximo, janela)
 
 
-__all__ = ["Limite", "RateLimitMiddleware", "ISENTOS_PADRAO"]
+class TetoDeIaMiddleware(BaseHTTPMiddleware):
+    """Recusa as rotas de IA quando o teto mensal de IA da organizacao estourou
+    (1.22.0, LIB-47 / ST-108). Contrato no SDD do ecossistema §5.16.
+
+    Uso no `server.py` (antes do CORS, como o rate limit)::
+
+        app.add_middleware(TetoDeIaMiddleware, rotas=["/api/chat", "/api/p/*/executar**"])
+
+    A organizacao vem do JWT (`organization_id`). Sem JWT valido, sem organizacao
+    ou sem resposta do AdminCenter, a requisicao segue (fail-open). Estourou → 402
+    com a mensagem do AdminCenter. Cache de 60 s por organizacao (na lib).
+    """
+
+    def __init__(self, app, rotas: Sequence[str] = ()):
+        super().__init__(app)
+        self._rotas = [Limite(r, 1) for r in rotas]
+        self._segredo: Optional[str] = None
+        self._algoritmo = "HS256"
+
+    def _organizacao(self, request: Request) -> Optional[str]:
+        if self._segredo is None:
+            self._segredo = os.getenv("SECRET_KEY", os.getenv("JWT_SECRET_KEY", ""))
+            self._algoritmo = os.getenv("ALGORITHM", "HS256")
+        auth = request.headers.get("authorization") or ""
+        if not self._segredo or auth[:7].lower() != "bearer ":
+            return None
+        payload = _decodificar_jwt(auth[7:].strip(), self._segredo, self._algoritmo)
+        org = (payload or {}).get("organization_id")
+        return str(org) if org else None
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if request.method == "OPTIONS" or not any(r.casa(path) for r in self._rotas):
+            return await call_next(request)
+        try:
+            org = self._organizacao(request)
+            if org:
+                from starlette.concurrency import run_in_threadpool
+                from .admin_center.service import get_admin_center_service
+                admin = get_admin_center_service()
+                sit = await run_in_threadpool(admin.situacao_consumo_ia, org) if admin else None
+                if sit and sit.get("bloqueado"):
+                    mensagem = sit.get("mensagem") or "Limite mensal de IA atingido."
+                    logger.warning("teto de IA: organizacao %s bloqueada em %s", org, path)
+                    return JSONResponse(status_code=402, content={
+                        "detail": mensagem, "message": mensagem, "error_type": "teto_ia",
+                        "gasto_brl": sit.get("gasto_brl"), "teto_brl": sit.get("teto_brl"),
+                    })
+        except Exception as exc:  # fail-open
+            logger.warning("teto de IA: falha ao conferir, deixando passar: %s", exc)
+        return await call_next(request)
+
+
+__all__ = ["Limite", "RateLimitMiddleware", "TetoDeIaMiddleware", "ISENTOS_PADRAO"]

@@ -6,7 +6,7 @@
 > lado servidor destes contratos vive no
 > [`admincenter-api`](../../admincenter-api/docs/SPEC.md).
 
-**Versão da lib:** **1.21.0** (`setup.py:version`).
+**Versão da lib:** **1.22.0** (`setup.py:version`).
 **Aderente ao `admincenter-api` até a migration `0061`** — `0044`
 (`execution_steps`), `0053` (`allowed_tables`), `0054` (métricas da conexão) e
 `0061` (produtos derivados: `product_id` do job, `incluir_filhos`, escrita em
@@ -106,7 +106,9 @@ automaxia_utils/
 ├── admin_center/
 │   ├── service.py          # AdminCenterService
 │   ├── jobs.py             # JobRunner (APScheduler + listener HTTP + WS)
-│   └── connections.py      # ResolvedConnection + ConnectionResolver (+ BigQuery)
+│   ├── connections.py      # ResolvedConnection + ConnectionResolver (+ BigQuery)
+│   ├── usuario.py          # usuário da requisição — dono do consumo de IA (1.22.0)
+│   └── teto_ia.py          # TetoDeIaAtingido + cache do teto (1.22.0)
 ├── auth/
 │   └── middleware.py       # AdminCenterAuth + helpers RBAC
 ├── registration/
@@ -118,7 +120,7 @@ automaxia_utils/
 ├── flows/
 │   └── runner.py           # FlowRunner, RegistroDeFerramentas, validar_fluxo (1.19.0)
 ├── sql_allowlist.py        # verificar_sql contra allowed_tables (1.17.0)
-├── rate_limit.py           # RateLimitMiddleware + Limite (1.21.0)
+├── rate_limit.py           # RateLimitMiddleware + Limite (1.21.0), TetoDeIaMiddleware (1.22.0)
 └── config/settings.py
 ```
 
@@ -174,8 +176,12 @@ extract_tokens_from_response
 HybridTokenCounter, LangChainTokenCallback, invalidate_model_price_cache
 definir_agente, agente_atual, agente_em_uso                          # agente da requisição
 
-# Rate limit (1.21.0, opcional — requer Starlette)
-RateLimitMiddleware, Limite
+# Rate limit (1.21.0) e teto de IA (1.22.0), opcional — requer Starlette
+RateLimitMiddleware, Limite, TetoDeIaMiddleware
+
+# Dono do consumo e teto de IA (1.22.0)
+TetoDeIaAtingido, definir_usuario_da_requisicao, usuario_da_requisicao
+# + AdminCenterService.situacao_consumo_ia() / .verificar_teto_ia()
 
 # Auth (opcional — requer FastAPI)
 AdminCenterAuth, AdminCenterAuthConfig, AuthenticatedUser
@@ -584,7 +590,8 @@ RATE_LIMIT_REDIS_URL=              # cai para REDIS_URL; sem nenhum, conta por w
 | v1.13.0 | `fastapi` e `python-jose` declarados como extras (CI da lib passa) |
 | v1.14.0 *(2026-08-26)* | Sincronização com a `infrabalance-shared-utils` 2.9.0: gate de produto voltou a funcionar (`ADMIN_CENTER_PRODUCT_SLUG`), auth em dev deixa de bater em produção, `ResolvedConnection` cobre `rest`/`arcgis`/`databricks` e os campos da migration 0042, `log_min_level`, desmembramento do `context` do log, guardas de `has_logging_identity()`, descoberta de `product_id`/`environment_id` por slug, `log_process(execution_id=…)`. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
 | v1.15.0 *(2026-08-31)* | **Execução observável**: `agent_step`/`execution_scope`/`log_step` gravam a linha do tempo de dentro de uma execução (`execution_steps`, migration 0044), com o modelo EFETIVO por etapa; `log_process` ganha `agent_slug`/`area_agent_slug`/`connection_id` (migration 0043) resolvendo pelo mesmo cache do token tracking; passos vão num POST só. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
-| **v1.21.0** *(atual, 2026-10-27)* | **Rate limit para os satélites**: `RateLimitMiddleware` + `Limite` (`automaxia_utils.rate_limit`), Redis com fallback em memória, fail-open (`LIB-45`). |
+| **v1.22.0** *(atual, 2026-10-27)* | **Consumo de IA na organização de quem usou** (o `track_token_usage` manda o usuário do JWT da requisição, `LIB-46`) e **teto mensal de IA** (`TetoDeIaMiddleware`, `verificar_teto_ia`, conferência no `FlowRunner`, `LIB-47`). Precisa do admincenter-api com as migrations `0078`/`0079`. |
+| **v1.21.0** *(2026-10-27)* | **Rate limit para os satélites**: `RateLimitMiddleware` + `Limite` (`automaxia_utils.rate_limit`), Redis com fallback em memória, fail-open (`LIB-45`). |
 | **v1.20.2** *(2026-10-05)* | **Intervalo que começa no domingo**: `0-2` virava `sun-tue` e o APScheduler recusava; o dia da semana vira sempre lista de nomes, com teste contra o croniter (`LIB-44`). |
 | **v1.20.1** *(2026-10-05, publicada no mesmo dia — `e7efd42`, tag `v1.20.1`)* | **Dia da semana do cron**: o `JobRunner` convertia `1-5` em terça–sábado (APScheduler 3.x, 0 = segunda); agora `gatilho_cron` converte para nomes (`LIB-43`). |
 | **v1.20.0** *(2026-10-05, publicada no mesmo dia — `8cdf25c`, tag `v1.20.0`)* | **Entrada opcional em ferramenta**: `opcionais=` no `@ferramenta`, a lista no `spec()` e `validar_fluxo` sem "sem origem" nelas (`LIB-40`). Sem mudança para quem não usa. |

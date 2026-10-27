@@ -487,6 +487,12 @@ class FlowRunner:
         modelo = ep.get('model_name')
         if not modelo:
             raise IaNaoConfigurada(f'o agente "{slug}" nao tem modelo selecionado')
+        # Teto mensal de IA da organizacao (1.22.0): agenda, webhook e WhatsApp nao
+        # passam pelo middleware das rotas — o no confere aqui. Estourou → o no
+        # falha com a mensagem do AdminCenter, como qualquer falha de no (D-15).
+        verificar_teto = getattr(self.admin, 'verificar_teto_ia', None)
+        if verificar_teto:
+            verificar_teto()
         s = no.get('saida') or {'formato': 'texto'}
         fmt = s.get('formato', 'texto')
         partes = [p for p in (ep.get('generic_content'), ep.get('custom_content')) if p]

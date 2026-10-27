@@ -1,13 +1,13 @@
 # SDD — automaxia-shared-utils
 
-> Desenho interno da lib `automaxia_utils` **1.21.0**.
+> Desenho interno da lib `automaxia_utils` **1.22.0**.
 > Requisitos: [SPEC.md](SPEC.md) · Backlog: [TASKS.md](TASKS.md) ·
 > Histórico: [`../CHANGELOG.md`](../CHANGELOG.md)
 > Contratos transversais: [`../../../docs/SDD.md`](../../../docs/SDD.md) — **não
 > repetidos aqui** (JWT, cofre, auto-registro, silo `mode`, linha do tempo §5.6,
 > fluxos §5.11, produtos derivados §5.12).
 
-Última revisão: **2026-10-27** · lib **1.21.0** (rate limit para os satélites, `LIB-45`, §4.7 e D-19);
+Última revisão: **2026-10-27** · lib **1.22.0** (dono do consumo de IA e teto mensal de IA, `LIB-46`/`LIB-47`, §4.8 e D-20); a 1.21.0 no mesmo dia (rate limit, §4.7, D-19);
 antes, no mesmo dia, a **1.20.1 publicada** (`e7efd42`, tag `v1.20.1`) — entrada opcional em ferramenta (1.20.0, §4.6) e o cron do `JobRunner`
 lido no padrão (1.20.1, §4.4, D-17). Antes, 28/09/2026 (1.19.0, `2d3a4bf`).
 
@@ -64,7 +64,9 @@ dependencies de permissão negam com 503 quando não conseguem decidir. Preferir
 | `migrations/runner.py` | `alembic upgrade` com retry | **alembic** (opcional) |
 | `token_tracking/counter.py` | Contagem e preço multi-provider; agente da requisição (`definir_agente`/`agente_em_uso`) | lazy: `tiktoken`, `litellm` |
 | `sql_allowlist.py` | `verificar_sql`/`tabelas_referenciadas`/`filtrar_tabelas` contra a allowlist da conexão (1.17.0) | `sqlglot` (core) |
-| `rate_limit.py` | `RateLimitMiddleware` + `Limite`: janela deslizante por chamador (1.21.0) | **Starlette** (opcional); lazy: `redis`, `jose` ou `jwt` |
+| `admin_center/usuario.py` | Usuário da requisição (`ContextVar`), marcado pelo `validate_token` e lido pelo `track_token_usage` (1.22.0) | nenhuma |
+| `admin_center/teto_ia.py` | `TetoDeIaAtingido` + cache de 60 s da situação do teto (1.22.0) | nenhuma |
+| `rate_limit.py` | `RateLimitMiddleware` + `Limite`: janela deslizante por chamador (1.21.0); `TetoDeIaMiddleware` (1.22.0) | **Starlette** (opcional); lazy: `redis`, `jose` ou `jwt` |
 | `flows/runner.py` | `FlowRunner`, `RegistroDeFerramentas`, `validar_fluxo` (1.19.0) | nenhuma — recebe o `AdminCenterService` e o LLM por injeção |
 
 Nenhum módulo importa outro fora de `admin_center` ↔ `jobs` (run context) — é o
@@ -341,6 +343,26 @@ requisição → OPTIONS ou isento (/health, /readiness, /docs…)? → passa
   sobrescreve o cabeçalho com o `$remote_addr` e o nginx do front só acrescenta no fim — contrato
   e ressalvas no [SDD do ecossistema §5.15](../../../docs/SDD.md).
 
+### 4.8 Dono do consumo e teto de IA (1.22.0)
+
+```
+validate_token(ok) ──► ContextVar (user_id, organization_id) da requisição
+track_token_usage(sem user_id) ──► manda o user_id do contexto ──► AdminCenter grava
+                                    token_usage.organization_id = org do usuário (ou do produto)
+
+rota de IA ──► TetoDeIaMiddleware: org do JWT ──► situacao_consumo_ia(org) [cache 60 s]
+                                         bloqueado? ──► 402 {detail, error_type: teto_ia}
+nó de agente do FlowRunner ──► admin.verificar_teto_ia() ──► TetoDeIaAtingido ──► falha do nó
+                               (sem usuário: product_id do escopo → org do produto derivado)
+```
+
+- O `user_id` que não existe em `users` (identidade sintética de api-key) o AdminCenter tira
+  do payload e usa a organização do produto — a lib não precisa distinguir.
+- A consulta usa o `_make_request` (com retry); como o resultado — inclusive o `None` da
+  falha — fica 60 s no cache, uma queda do AdminCenter custa no máximo uma espera por minuto
+  por processo.
+- Contrato do lado servidor e lacunas conhecidas no [SDD do ecossistema §5.16](../../../docs/SDD.md).
+
 ---
 
 ## 5. Decisões de design
@@ -365,6 +387,7 @@ requisição → OPTIONS ou isento (/health, /readiness, /docs…)? → passa
 | D-16 | `sql_allowlist` **fail-closed** (1.17.0) | SQL que o `sqlglot` não consegue ler é recusado — "não sei, então não", como D-04 |
 | D-17 | Cron do job é o **padrão** (o do croniter do AdminCenter), convertido para o APScheduler com o dia da semana em **nomes** (1.20.1) | quem mostra o próximo horário (AdminCenter) e quem dispara (lib) precisam ler a mesma expressão do mesmo jeito; com nomes não há numeração para divergir |
 | D-19 | Rate limit **fail-open** e com cota por grupo de rota, não por caminho (1.21.0) | o limitador protege o produto e não pode derrubá-lo; contar por caminho exato deixa rota com id na URL sem limite efetivo, e uma cota única faria o polling de uma tela gastar a cota da rota de LLM |
+| D-20 | Teto de IA conferido **na porta da rota** (middleware) e no **nó do fluxo**, não no `get_effective_prompt` (1.22.0) | o `get_effective_prompt` também roda depois da chamada (resolução do modelo no tracking) e os satélites o envolvem em `try/except` que tratam falha como "IA não configurada" — o bloqueio sumiria ou viraria outra mensagem |
 | D-18 | Entrada opcional **declarada na ferramenta**, não descoberta pela validação (1.20.0) | quem sabe se a função tem padrão é a ferramenta; o Forge mantinha uma lista paralela (`OPCIONAIS`) que podia divergir do código |
 
 ---

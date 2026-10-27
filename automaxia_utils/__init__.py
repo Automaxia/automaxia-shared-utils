@@ -2,7 +2,7 @@
 Automaxia Utils - Pacote compartilhado
 """
 
-__version__ = "1.21.0"
+__version__ = "1.22.0"
 __author__ = "Automaxia"
 
 # Importar de admin_center
@@ -20,6 +20,9 @@ from .admin_center import (
     ConnectionResolver,
     build_bigquery_client,
 )
+# Teto mensal de IA e dono do consumo (1.22.0)
+from .admin_center.teto_ia import TetoDeIaAtingido
+from .admin_center.usuario import definir_usuario_da_requisicao, usuario_da_requisicao
 
 # Importar de token_tracking
 from .token_tracking import (
@@ -98,7 +101,7 @@ except ImportError:
 
 # Rate limit (1.21.0) — middleware Starlette, opcional como o auth.
 try:
-    from .rate_limit import Limite, RateLimitMiddleware
+    from .rate_limit import Limite, RateLimitMiddleware, TetoDeIaMiddleware
     _RATE_LIMIT_AVAILABLE = True
 except ImportError:
     _RATE_LIMIT_AVAILABLE = False
@@ -121,6 +124,9 @@ __all__ = [
     "ResolvedConnection",
     "ConnectionResolver",
     "build_bigquery_client",
+    "TetoDeIaAtingido",
+    "definir_usuario_da_requisicao",
+    "usuario_da_requisicao",
 
     # Token Tracking
     "track_api_response",
@@ -146,7 +152,7 @@ __all__ = [
 ]
 
 if _RATE_LIMIT_AVAILABLE:
-    __all__ += ["Limite", "RateLimitMiddleware"]
+    __all__ += ["Limite", "RateLimitMiddleware", "TetoDeIaMiddleware"]
 
 if _MIGRATIONS_AVAILABLE:
     __all__ += ["run_migrations"]

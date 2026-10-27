@@ -153,6 +153,16 @@ class AuthenticatedUser(BaseModel):
 # AUTH SERVICE
 # =============================================
 
+def _marcar_usuario(user: "AuthenticatedUser") -> None:
+    """Dono do consumo de IA desta requisicao (1.22.0, `admin_center/usuario.py`).
+    Telemetria: nunca derruba a validacao do token."""
+    try:
+        from ..admin_center.usuario import definir_usuario_da_requisicao
+        definir_usuario_da_requisicao(user.user_id, user.organization_id)
+    except Exception:
+        pass
+
+
 class AdminCenterAuth:
     """
     Servico de autenticacao centralizada via AdminCenter.
@@ -357,6 +367,7 @@ class AdminCenterAuth:
         cache_key = f"token_{hash(token)}"
         cached = self._get_cached_user(cache_key)
         if cached:
+            _marcar_usuario(cached)
             return cached
 
         # Validar
@@ -368,6 +379,7 @@ class AdminCenterAuth:
         # Cachear resultado
         if user:
             self._cache_user(cache_key, user)
+            _marcar_usuario(user)
 
         return user
 
