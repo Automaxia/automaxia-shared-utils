@@ -278,6 +278,12 @@ Pelo mesmo mecanismo, `log_process()` e `@track_execution` herdam o `job_id` do
 run (1.9.0) — é o que permite ao faturamento vincular execução ao job e aplicar
 a cobrança de mensagens Meta, que é opt-in por job.
 
+**Um run = uma linha (1.23.0).** O run do job já existe em `process_execution_logs`
+(criado no início, fechado no `/finish`). Um `log_process` com o **mesmo nome do job**
+dentro do handler (o padrão `track()`) **não grava linha**: o `output_data` é acumulado no
+contexto e vai no `/finish` do run. Processo com outro nome dentro do job (sub-etapa) segue
+virando linha própria, com o `job_id`.
+
 ### 5.5 Produto em escopo (1.19.0)
 
 Para um satélite que **hospeda produtos derivados** (o Forge; contrato no SDD
@@ -590,7 +596,8 @@ RATE_LIMIT_REDIS_URL=              # cai para REDIS_URL; sem nenhum, conta por w
 | v1.13.0 | `fastapi` e `python-jose` declarados como extras (CI da lib passa) |
 | v1.14.0 *(2026-08-26)* | Sincronização com a `infrabalance-shared-utils` 2.9.0: gate de produto voltou a funcionar (`ADMIN_CENTER_PRODUCT_SLUG`), auth em dev deixa de bater em produção, `ResolvedConnection` cobre `rest`/`arcgis`/`databricks` e os campos da migration 0042, `log_min_level`, desmembramento do `context` do log, guardas de `has_logging_identity()`, descoberta de `product_id`/`environment_id` por slug, `log_process(execution_id=…)`. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
 | v1.15.0 *(2026-08-31)* | **Execução observável**: `agent_step`/`execution_scope`/`log_step` gravam a linha do tempo de dentro de uma execução (`execution_steps`, migration 0044), com o modelo EFETIVO por etapa; `log_process` ganha `agent_slug`/`area_agent_slug`/`connection_id` (migration 0043) resolvendo pelo mesmo cache do token tracking; passos vão num POST só. Detalhes em [`../CHANGELOG.md`](../CHANGELOG.md). |
-| **v1.22.0** *(atual, 2026-10-27)* | **Consumo de IA na organização de quem usou** (o `track_token_usage` manda o usuário do JWT da requisição, `LIB-46`) e **teto mensal de IA** (`TetoDeIaMiddleware`, `verificar_teto_ia`, conferência no `FlowRunner`, `LIB-47`). Precisa do admincenter-api com as migrations `0078`/`0079`. |
+| **v1.23.0** *(atual, 2026-11-03)* | **Um run de job = uma linha**: `log_process` do próprio job dentro do handler é absorvido no run (sem `started` órfão nem `completed` duplicado no faturamento) e a saída vai no `/finish`; horários do `log_process` em UTC com fuso (`LIB-48`). |
+| **v1.22.0** *(2026-10-27)* | **Consumo de IA na organização de quem usou** (o `track_token_usage` manda o usuário do JWT da requisição, `LIB-46`) e **teto mensal de IA** (`TetoDeIaMiddleware`, `verificar_teto_ia`, conferência no `FlowRunner`, `LIB-47`). Precisa do admincenter-api com as migrations `0078`/`0079`. |
 | **v1.21.0** *(2026-10-27)* | **Rate limit para os satélites**: `RateLimitMiddleware` + `Limite` (`automaxia_utils.rate_limit`), Redis com fallback em memória, fail-open (`LIB-45`). |
 | **v1.20.2** *(2026-10-05)* | **Intervalo que começa no domingo**: `0-2` virava `sun-tue` e o APScheduler recusava; o dia da semana vira sempre lista de nomes, com teste contra o croniter (`LIB-44`). |
 | **v1.20.1** *(2026-10-05, publicada no mesmo dia — `e7efd42`, tag `v1.20.1`)* | **Dia da semana do cron**: o `JobRunner` convertia `1-5` em terça–sábado (APScheduler 3.x, 0 = segunda); agora `gatilho_cron` converte para nomes (`LIB-43`). |

@@ -5,7 +5,7 @@
 > **Convenção de ID:** itens abertos usam `LIB-##`. Itens concluídos ficam como
 > checklist histórica, sem ID.
 
-Última revisão: **2026-10-27** · lib **1.22.0** — `LIB-46` (dono do consumo de IA) e `LIB-47` (teto mensal de IA);
+Última revisão: **2026-11-03** · lib **1.23.0** — `LIB-48` (um run de job = uma linha); `LIB-46` (dono do consumo de IA) e `LIB-47` (teto mensal de IA);
 a 1.21.0 no mesmo dia (`LIB-45`, rate limit). Seções 1.19.0 a 1.22.0 no fim.
 
 > O backlog abaixo foi escrito na 1.12.0 e continua válido — o que entrou depois
@@ -419,4 +419,15 @@ a 1.21.0 no mesmo dia (`LIB-45`, rate limit). Seções 1.19.0 a 1.22.0 no fim.
       `TetoDeIaMiddleware` (402 nas rotas de IA) e conferência no nó de agente do `FlowRunner`
       (D-20). Provado no local: sem teto → livre; teto R$ 0,01 → `bloqueado`, a exceção sai, o
       middleware devolve 402 na rota de IA e 200 na comum e para a outra organização, e o aviso
-      entra uma vez só no sino.
+      entra uma vez só no sino. **Publicada no mesmo dia** (`db14be0`, tag `v1.22.0`).
+
+### 1.23.0 (03/11/2026)
+
+- [x] **LIB-48** — (03/11/2026, **1.23.0**) **Um run de job = uma linha.** O `track()` da folha
+      gerava, por execução, um `started` órfão e um `completed` duplicado em
+      `process_execution_logs` (na lista de runs do job e no faturamento: 239 min a mais na
+      folha; mesmo padrão no Talk e no Forge). `log_process` com o nome do job dentro do handler
+      passa a ser absorvido no `_RunContext` e a saída vai no `/finish`; horários em UTC com
+      fuso e `started_at` reconstruído pela duração. `tests/test_run_sem_duplicata.py` (6).
+      Par no admincenter-api: compatibilidade para produtos ainda na lib antiga, `metadata` e
+      fuso do lado do servidor.

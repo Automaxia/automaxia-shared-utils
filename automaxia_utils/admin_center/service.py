@@ -11,7 +11,7 @@ import logging
 import requests
 import uuid
 from typing import Dict, Optional, Any, List
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from threading import Thread, Lock, local
 from queue import Queue, Empty
 from contextlib import contextmanager
@@ -1356,28 +1356,44 @@ class AdminCenterService:
             self.logger.error(f"IDs inválidos: product_id={pid}, environment_id={env}")
             return False
 
-        now = datetime.utcnow()
+        # UTC COM fuso. `datetime.utcnow()` (ate' a 1.22) saia sem offset e o
+        # Postgres do AdminCenter (TimeZone=America/Sao_Paulo) gravava como hora
+        # local: todo started_at/finished_at ficava 3h no futuro.
+        now = datetime.now(timezone.utc)
+        status_norm = status.lower()
 
         # Herda o job_id do run context quando emitido de dentro de um handler
         # de job e o caller não passou explicitamente. Import lazy pra evitar
         # circular: service.py <- jobs.py <- service.py. Override explícito manda.
-        if not job_id:
-            try:
-                from .jobs import current_run_context  # noqa: PLC0415
-                ctx = current_run_context()
-                if ctx and getattr(ctx, 'job_id', None):
-                    job_id = ctx.job_id
-            except Exception:
-                pass
+        ctx = None
+        try:
+            from .jobs import current_run_context  # noqa: PLC0415
+            ctx = current_run_context()
+        except Exception:
+            pass
+        if not job_id and ctx and getattr(ctx, 'job_id', None):
+            job_id = ctx.job_id
+
+        # Log do PROPRIO job dentro do handler: o run ja' existe — nao vira linha.
+        if self._absorver_no_run(ctx, process_name, output_data):
+            return True
+
+        # Sem `started` explicito no fim, o backend preenchia started_at com o
+        # now() do INSERT (= a hora do fim). Com a duracao, da' para reconstruir.
+        started_at = None
+        if status_norm == "started":
+            started_at = now
+        elif duration_ms:
+            started_at = now - timedelta(milliseconds=duration_ms)
 
         payload = {
             "product_id": str(product_uuid),
             "environment_id": str(environment_uuid) if environment_uuid else None,
             "job_id": job_id,
             "process_name": process_name,
-            "status": status.lower(),
-            "started_at": now.isoformat() if status.lower() == "started" else None,
-            "finished_at": now.isoformat() if status.lower() in ["completed", "failed"] else None,
+            "status": status_norm,
+            "started_at": started_at.isoformat() if started_at else None,
+            "finished_at": now.isoformat() if status_norm in ["completed", "failed"] else None,
             "duration_ms": duration_ms,
             "input_data": input_data or {},
             "output_data": output_data or {},
@@ -1425,6 +1441,28 @@ class AdminCenterService:
         
         # SEMPRE ASSÍNCRONO - nunca bloqueia a aplicação
         return self._enqueue_safely("log_process", payload)
+
+    @staticmethod
+    def _absorver_no_run(ctx, process_name: str, output_data: Optional[Dict]) -> bool:
+        """True quando o log e' do PROPRIO job em execucao e nao deve virar linha.
+
+        Dentro de um handler do JobRunner o run ja' existe em
+        process_execution_logs (criado no inicio, fechado no /finish). Um
+        `log_process` com o MESMO nome do job — o padrao `track()` dos produtos —
+        e' o mesmo run contado de novo: ate' a 1.22 gerava um `started` que
+        nunca fechava e um `completed` duplicado, ambos com o job_id (logo, na
+        lista de execucoes do job) e somados no faturamento por minuto. Aqui o
+        `output_data` e' acumulado no contexto e vai no /finish do run real.
+
+        Processo com OUTRO nome dentro do job (sub-etapa) segue como linha
+        propria, como antes."""
+        if not ctx or not getattr(ctx, 'run_id', None):
+            return False
+        if process_name != getattr(ctx, 'job_slug', None):
+            return False
+        if output_data:
+            ctx.output_data.update(output_data)
+        return True
 
     # ==================== EXECUTION STEPS ====================
     #

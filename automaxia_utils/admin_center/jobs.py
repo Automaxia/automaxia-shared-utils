@@ -103,6 +103,13 @@ class _RunContext:
     # AdminCenter empurra event=='job.cancel_run'.
     cancel_event: "threading.Event" = field(default_factory=threading.Event)
     cancel_reason: Optional[str] = None
+    # Saida do run acumulada pelos `log_process` do PROPRIO job emitidos dentro
+    # do handler (ex.: o `track()` da folha). Ate' a 1.22 cada um desses virava
+    # uma linha nova em process_execution_logs — um `started` orfao + um
+    # `completed` duplicado por execucao, que apareciam na lista de runs e
+    # DOBRAVAM os minutos faturados. Agora sao absorvidos aqui e vao no
+    # /finish do run real (ver AdminCenterService._absorver_no_run).
+    output_data: Dict[str, Any] = field(default_factory=dict)
 
 
 # Thread-local em escopo de modulo: serve para que log_application() do
@@ -440,7 +447,8 @@ class JobRunner:
             if run_id:
                 self._finish_run(run_id, status="cancelled",
                                  duration_ms=duration_ms,
-                                 error_message=ctx.cancel_reason or "Cancelado pelo operador")
+                                 error_message=ctx.cancel_reason or "Cancelado pelo operador",
+                                 output_data=ctx.output_data)
             return False
         except Exception as e:
             duration_ms = int((time.time() - ctx.started_at) * 1000)
@@ -448,7 +456,8 @@ class JobRunner:
             if run_id:
                 self._finish_run(run_id, status="failed",
                                  duration_ms=duration_ms,
-                                 error_message=str(e))
+                                 error_message=str(e),
+                                 output_data=ctx.output_data)
             return False
         else:
             duration_ms = int((time.time() - ctx.started_at) * 1000)
@@ -458,12 +467,14 @@ class JobRunner:
             if ctx.cancel_event.is_set():
                 if run_id:
                     self._finish_run(run_id, status="cancelled", duration_ms=duration_ms,
-                                     error_message=ctx.cancel_reason or "Cancelado pelo operador")
+                                     error_message=ctx.cancel_reason or "Cancelado pelo operador",
+                                     output_data=ctx.output_data)
                 logger.info("JobRunner: job %s terminou normal apos pedido de cancelamento — reportado como cancelled", slug)
                 return False
 
             if run_id:
-                self._finish_run(run_id, status="completed", duration_ms=duration_ms)
+                self._finish_run(run_id, status="completed", duration_ms=duration_ms,
+                                 output_data=ctx.output_data)
             logger.info("JobRunner: job %s concluido em %dms", slug, duration_ms)
             return True
         finally:

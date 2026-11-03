@@ -8,6 +8,25 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.23.0] — 2026-11-03
+
+Responsável técnico: Wesley Romualdo da Silva
+
+### Corrigido
+
+- **Um run de job = uma linha** (`LIB-48`): dentro de um handler do `JobRunner`, o
+  `log_process` com o **mesmo nome do job** (o padrão `track()` dos produtos) gravava linhas
+  novas em `process_execution_logs` — um `started` que nunca fechava e um `completed`
+  duplicado, ambos com o `job_id`, logo na lista de execuções do job **e somados no
+  faturamento por minuto** (a folha de pagamento tinha 239 min duplicados). Agora esses logs
+  não saem da lib: o `output_data` vai no `/finish` do run real (`_RunContext.output_data`),
+  em todos os desfechos (completed, failed, cancelled). Sub-etapa com outro nome e
+  `log_process` fora de job seguem iguais.
+- **Horário de `log_process` em UTC com fuso**: `datetime.utcnow()` saía sem offset e o
+  Postgres do AdminCenter (`America/Sao_Paulo`) gravava 3h no futuro. No `completed`/`failed`
+  com `duration_ms`, o `started_at` passa a ser enviado (fim − duração) — antes o backend
+  preenchia com a hora do INSERT, que é a do fim.
+
 ## [1.22.0] — 2026-10-27
 
 Responsável técnico: Wesley Romualdo da Silva
