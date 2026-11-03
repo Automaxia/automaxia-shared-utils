@@ -1,6 +1,6 @@
 # SDD — automaxia-shared-utils
 
-> Desenho interno da lib `automaxia_utils` **1.22.0**.
+> Desenho interno da lib `automaxia_utils` **1.23.0**.
 > Requisitos: [SPEC.md](SPEC.md) · Backlog: [TASKS.md](TASKS.md) ·
 > Histórico: [`../CHANGELOG.md`](../CHANGELOG.md)
 > Contratos transversais: [`../../../docs/SDD.md`](../../../docs/SDD.md) — **não
@@ -189,6 +189,13 @@ compara 17 crons com o croniter.
 `job.cancel_run` seta `cancel_event` no `_RunContext`; se o handler não cooperar
 mas a flag ficou setada, o `run_job` reporta `cancelled` mesmo assim — o registro
 reflete o que o operador pediu.
+
+**Um run = uma linha (1.23.0, `LIB-48`).** `log_process` com o nome do job dentro
+do handler não vai para a fila: `_absorver_no_run` acumula o `output_data` em
+`_RunContext.output_data`, e o `run_job` manda isso no `/finish` em todos os
+desfechos. Antes virava um `started` órfão e um `completed` duplicado (com o
+`job_id`, logo na lista de runs e no faturamento por minuto). O critério é só o
+NOME: sub-etapa com outro nome continua sendo linha, como antes.
 
 **Modo `produtos_filhos` (1.19.0).** `JobRunner(svc, produtos_filhos=True)` pede
 `GET /agent/job?incluir_filhos=true` e passa a receber também os jobs dos

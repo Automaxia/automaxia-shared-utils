@@ -31,7 +31,7 @@ e fornecer infraestrutura compartilhada:
   entra no catálogo do AdminCenter.
 - **Migrations**: `run_migrations` (alembic com retry) para o lifespan.
 
-Versão atual: **1.22.0** (em `setup.py` e `automaxia_utils/__init__.py` — mexa nos dois) — histórico em [CHANGELOG.md](CHANGELOG.md).
+Versão atual: **1.23.0** (em `setup.py` e `automaxia_utils/__init__.py` — mexa nos dois) — histórico em [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -66,7 +66,7 @@ pip install "automaxia-utils[dev]"          # pytest, black, flake8, mypy, twine
 ```
 automaxia-shared-utils/
 ├── README.md                       # ~500 linhas com quickstart + exemplos
-├── setup.py                        # versão 1.22.0 (igual ao __version__ do __init__.py)
+├── setup.py                        # versão 1.23.0 (igual ao __version__ do __init__.py)
 ├── requirements.txt
 ├── automaxia_utils/
 │   ├── __init__.py                 # API pública re-exportada
