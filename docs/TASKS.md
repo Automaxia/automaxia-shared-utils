@@ -5,7 +5,7 @@
 > **Convenção de ID:** itens abertos usam `LIB-##`. Itens concluídos ficam como
 > checklist histórica, sem ID.
 
-Última revisão: **2026-11-03** · lib **1.23.0** — `LIB-48` (um run de job = uma linha); `LIB-46` (dono do consumo de IA) e `LIB-47` (teto mensal de IA);
+Última revisão: **2026-11-17** · lib **1.23.1** — `LIB-49` (rate limit sem a `X-API-Key` na identidade); antes, **2026-11-03** · lib **1.23.0** — `LIB-48` (um run de job = uma linha); `LIB-46` (dono do consumo de IA) e `LIB-47` (teto mensal de IA);
 a 1.21.0 no mesmo dia (`LIB-45`, rate limit). Seções 1.19.0 a 1.22.0 no fim.
 
 > O backlog abaixo foi escrito na 1.12.0 e continua válido — o que entrou depois
@@ -431,3 +431,11 @@ a 1.21.0 no mesmo dia (`LIB-45`, rate limit). Seções 1.19.0 a 1.22.0 no fim.
       fuso e `started_at` reconstruído pela duração. `tests/test_run_sem_duplicata.py` (6).
       Par no admincenter-api: compatibilidade para produtos ainda na lib antiga, `metadata` e
       fuso do lado do servidor.
+
+### 1.23.1 (17/11/2026)
+
+- [x] **LIB-49** — (17/11/2026, **1.23.1**) **Rate limit contornável pela `X-API-Key`** (`ST-110`). O
+      `RateLimitMiddleware` contava pela chave sem validá-la: chave aleatória por requisição = cota nova
+      a cada vez, nos seis satélites. Saiu da identidade (JWT conferido → IP); membro do sorted set do
+      Redis com sufixo aleatório. Provado por script: 120 requisições do mesmo IP, cada uma com uma
+      chave nova, cota 50 → 50 passam e 70 levam 429. Publicação e deploy dos satélites no `ST-110`.

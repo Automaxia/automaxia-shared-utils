@@ -20,11 +20,16 @@ sair com os cabecalhos de CORS)::
 Identidade do chamador, nesta ordem:
   1. `user_id` (ou `sub`) do JWT, quando o Bearer e valido — limita a PESSOA,
      entao um escritorio atras de um NAT nao divide a mesma cota;
-  2. hash da `X-API-Key`, quando houver (chamada de maquina);
-  3. IP: o PRIMEIRO valor do `X-Forwarded-For`. No cluster o ingress-nginx
+  2. IP: o PRIMEIRO valor do `X-Forwarded-For`. No cluster o ingress-nginx
      sobrescreve o cabecalho com o `$remote_addr` (nao concatena o que o
      cliente mandou), e o nginx do front so acrescenta o IP dele no fim — o
-     primeiro valor e o cliente real e nao da para forjar pela internet.
+     primeiro valor e o cliente real e nao da para forjar pela internet
+     (conferido em producao em 17/11/2026, ST-110).
+
+  A `X-API-Key` NAO e identidade (1.23.1, LIB-49): o satelite nao tem como
+  validar a chave, e contar por ela dava a quem mandasse uma chave inventada
+  por requisicao uma cota nova a cada vez — o limite inteiro era contornavel.
+  Chamada de maquina conta pelo IP, como qualquer outra sem JWT.
 
 Contagem: cada `Limite` tem a sua (por identidade); o resto da API divide a
 cota padrao. Uma tela que faz polling nao gasta a cota da rota de LLM.
@@ -44,10 +49,10 @@ erro inesperado do proprio limitador deixa a requisicao passar.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import re
+import secrets
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -141,7 +146,7 @@ class _BackendRedis:
     async def hit(self, key: str, maximo: int, janela: int) -> Tuple[bool, int, int]:
         agora = time.time()
         rkey = f"rl:{self._prefixo}:{key}"
-        membro = f"{agora}:{id(object())}"
+        membro = f"{agora}:{secrets.token_hex(6)}"  # unico mesmo em requisicoes simultaneas
         client = await self._client()
         pipe = client.pipeline(transaction=True)
         pipe.zremrangebyscore(rkey, 0, agora - janela)
@@ -244,9 +249,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 ident = payload.get("user_id") or payload.get("sub")
                 if ident:
                     return f"user:{ident}"
-        chave = request.headers.get("x-api-key")
-        if chave:
-            return "key:" + hashlib.sha256(chave.encode()).hexdigest()[:24]
         encaminhado = request.headers.get("x-forwarded-for")
         if encaminhado:
             return "ip:" + encaminhado.split(",")[0].strip()

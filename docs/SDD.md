@@ -1,13 +1,13 @@
 # SDD — automaxia-shared-utils
 
-> Desenho interno da lib `automaxia_utils` **1.23.0**.
+> Desenho interno da lib `automaxia_utils` **1.23.1**.
 > Requisitos: [SPEC.md](SPEC.md) · Backlog: [TASKS.md](TASKS.md) ·
 > Histórico: [`../CHANGELOG.md`](../CHANGELOG.md)
 > Contratos transversais: [`../../../docs/SDD.md`](../../../docs/SDD.md) — **não
 > repetidos aqui** (JWT, cofre, auto-registro, silo `mode`, linha do tempo §5.6,
 > fluxos §5.11, produtos derivados §5.12).
 
-Última revisão: **2026-10-27** · lib **1.22.0** (dono do consumo de IA e teto mensal de IA, `LIB-46`/`LIB-47`, §4.8 e D-20); a 1.21.0 no mesmo dia (rate limit, §4.7, D-19);
+Última revisão: **2026-11-17** · lib **1.23.1** (rate limit sem a `X-API-Key` na identidade, `LIB-49`, §4.7) · antes, **2026-10-27** · lib **1.22.0** (dono do consumo de IA e teto mensal de IA, `LIB-46`/`LIB-47`, §4.8 e D-20); a 1.21.0 no mesmo dia (rate limit, §4.7, D-19);
 antes, no mesmo dia, a **1.20.1 publicada** (`e7efd42`, tag `v1.20.1`) — entrada opcional em ferramenta (1.20.0, §4.6) e o cron do `JobRunner`
 lido no padrão (1.20.1, §4.4, D-17). Antes, 28/09/2026 (1.19.0, `2d3a4bf`).
 
@@ -328,11 +328,11 @@ descreve a trilha completa, proposta):
 - o `ResultadoFluxo.traco` guarda entradas e saídas de cada nó em memória —
   quem chama decide se grava (RN-FL-03 é do produto).
 
-### 4.7 Rate limit (1.21.0)
+### 4.7 Rate limit (1.21.0; identidade revista na 1.23.1)
 
 ```
 requisição → OPTIONS ou isento (/health, /readiness, /docs…)? → passa
-           → identidade: user_id|sub do JWT → hash da X-API-Key → 1º IP do X-Forwarded-For
+           → identidade: user_id|sub do JWT (assinatura conferida) → senão 1º IP do X-Forwarded-For
            → grupo: 1º Limite cuja rota casa (`*` = um segmento, `**` = o resto) ou "*" (cota padrão)
            → janela deslizante em Redis (sorted set `rl:<produto>:<identidade>|<grupo>`) ou memória
            → estourou? 429 + Retry-After + X-RateLimit-*   senão segue e devolve os X-RateLimit-*
@@ -349,6 +349,12 @@ requisição → OPTIONS ou isento (/health, /readiness, /docs…)? → passa
 - O IP é o **primeiro** valor do `X-Forwarded-For` porque, no cluster, o ingress-nginx
   sobrescreve o cabeçalho com o `$remote_addr` e o nginx do front só acrescenta no fim — contrato
   e ressalvas no [SDD do ecossistema §5.15](../../../docs/SDD.md).
+- **Só é identidade o que o chamador não inventa** (1.23.1, `LIB-49`): a `X-API-Key` saiu. O
+  satélite não tem como validar a chave (quem valida é o AdminCenter), e contar por ela dava a quem
+  mandasse uma chave aleatória por requisição uma cota nova a cada vez — o limite inteiro era
+  contornável, e cada chave deixava um bucket em memória. Chamada de máquina conta pelo IP.
+- **Membro do sorted set com sufixo aleatório** (`secrets.token_hex`): duas requisições no mesmo
+  instante viram duas entradas, e o `zrem` da recusada só apaga a dela.
 
 ### 4.8 Dono do consumo e teto de IA (1.22.0)
 

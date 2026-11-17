@@ -8,6 +8,22 @@ Histórico anterior à 1.13.0 está na tabela de versões de
 
 ---
 
+## [1.23.1] — 2026-11-17
+
+Responsável técnico: Wesley Romualdo da Silva
+
+### Corrigido
+
+- **Rate limit contornável pela `X-API-Key`** (`LIB-49`, `ST-110`): o `RateLimitMiddleware`
+  contava a requisição pela chave **sem validá-la** — uma `X-API-Key` aleatória por requisição
+  ganhava cota nova a cada vez e passava sem limite nos seis satélites, deixando ainda um bucket
+  em memória por chave. A identidade agora é só o JWT com assinatura conferida ou o IP (1º do
+  `X-Forwarded-For`). Nenhum satélite recebe chamada com `X-API-Key` (conferido no código).
+- **Membro do sorted set no Redis**: `id(object())` podia repetir; agora sufixo de
+  `secrets.token_hex`, e duas requisições simultâneas contam duas.
+
+---
+
 ## [1.23.0] — 2026-11-03
 
 Responsável técnico: Wesley Romualdo da Silva
